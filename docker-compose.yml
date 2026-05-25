@@ -30,6 +30,7 @@ services:
   worker-1:
     build:
       context: ./worker
+    restart: unless-stopped
     environment:
       CONTROL_PLANE_URL: ws://control-plane:8000/ws/worker
       WORKER_NAME: worker-1
@@ -41,6 +42,7 @@ services:
   worker-2:
     build:
       context: ./worker
+    restart: unless-stopped
     environment:
       CONTROL_PLANE_URL: ws://control-plane:8000/ws/worker
       WORKER_NAME: worker-2
@@ -52,6 +54,7 @@ services:
   worker-3:
     build:
       context: ./worker
+    restart: unless-stopped
     environment:
       CONTROL_PLANE_URL: ws://control-plane:8000/ws/worker
       WORKER_NAME: worker-3

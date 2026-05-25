@@ -25,14 +25,14 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
-            "name": "execute_shell",
-            "description": "Execute a shell command on a remote worker machine and return stdout/stderr.",
+            "name": "bash",
+            "description": "Run a bash command on a remote worker machine and return stdout/stderr.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The shell command to execute",
+                        "description": "The bash command to execute",
                     },
                     "worker_name": {
                         "type": "string",
@@ -40,6 +40,52 @@ TOOLS_SCHEMA = [
                     },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read the contents of a file on a remote worker machine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or relative path to the file to read",
+                    },
+                    "worker_name": {
+                        "type": "string",
+                        "description": "Optional: specific worker to read from.",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file on a remote worker machine. Creates parent directories if needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or relative path to the file to write",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file",
+                    },
+                    "worker_name": {
+                        "type": "string",
+                        "description": "Optional: specific worker to write to.",
+                    },
+                },
+                "required": ["path", "content"],
             },
         },
     },
@@ -72,6 +118,8 @@ class WorkerPool:
         self.capabilities: dict[str, list[str]] = {}
         self._pending: dict[str, asyncio.Future] = {}
         self._pending_worker: dict[str, str] = {}  # tool_call_id -> worker_name
+        self._worker_session: dict[str, str] = {}   # worker_name -> session_id
+        self._session_worker: dict[str, str] = {}   # session_id -> worker_name
         self._round_robin_idx = 0
 
     def register(self, name: str, ws: WebSocket, caps: list[str] | None = None):
@@ -82,6 +130,9 @@ class WorkerPool:
     def unregister(self, name: str):
         self.workers.pop(name, None)
         self.capabilities.pop(name, None)
+        sid = self._worker_session.pop(name, None)
+        if sid:
+            self._session_worker.pop(sid, None)
         failed_ids = [
             tid for tid, wn in self._pending_worker.items() if wn == name
         ]
@@ -94,15 +145,37 @@ class WorkerPool:
                 ))
         logger.info(f"Worker unregistered: {name} (total: {len(self.workers)})")
 
+    def bind_worker(self, worker_name: str, session_id: str):
+        self._worker_session[worker_name] = session_id
+        self._session_worker[session_id] = worker_name
+        logger.info(f"Bound {worker_name} to session {session_id[:8]}")
+
+    def unbind_worker(self, worker_name: str):
+        sid = self._worker_session.pop(worker_name, None)
+        if sid:
+            self._session_worker.pop(sid, None)
+        logger.info(f"Unbound {worker_name}")
+
+    def get_worker_for_session(self, session_id: str) -> str | None:
+        return self._session_worker.get(session_id)
+
     def pick_worker(
-        self, function_name: str, preferred: str | None = None
+        self, function_name: str, session_id: str, preferred: str | None = None
     ) -> tuple[str, WebSocket] | None:
+        already_bound = self._session_worker.get(session_id)
+        if already_bound and already_bound in self.workers:
+            return already_bound, self.workers[already_bound]
+
+        bound_names = set(self._worker_session.keys())
         eligible = {
             n: ws for n, ws in self.workers.items()
-            if function_name in self.capabilities.get(n, [])
+            if n not in bound_names and function_name in self.capabilities.get(n, [])
         }
         if not eligible:
-            eligible = self.workers
+            eligible = {
+                n: ws for n, ws in self.workers.items()
+                if n not in bound_names
+            }
         if not eligible:
             return None
         if preferred and preferred in eligible:
@@ -114,15 +187,19 @@ class WorkerPool:
         return name, eligible[name]
 
     async def dispatch_tool_call(
-        self, tool_call_id: str, function_name: str, arguments: dict
+        self, tool_call_id: str, function_name: str, arguments: dict,
+        session_id: str = "",
     ) -> tuple[str, str]:
         """Returns (worker_name, result_json)."""
         preferred = arguments.pop("worker_name", None)
-        target = self.pick_worker(function_name, preferred)
+        target = self.pick_worker(function_name, session_id, preferred)
         if target is None:
-            return "", json.dumps({"error": "No workers available"})
+            return "", json.dumps({"error": "No available workers. All workers are bound to sessions."})
 
         worker_name, ws = target
+        if worker_name not in self._worker_session and session_id:
+            self.bind_worker(worker_name, session_id)
+
         logger.info(f"Dispatching {function_name} (id={tool_call_id}) to {worker_name}")
 
         loop = asyncio.get_running_loop()
@@ -153,13 +230,31 @@ class WorkerPool:
         if future and not future.done():
             future.set_result(result)
 
-    def busy_worker_names(self) -> set[str]:
-        return set(self._pending_worker.values())
+    async def terminate_worker(self, worker_name: str, reason: str):
+        ws = self.workers.get(worker_name)
+        if ws:
+            try:
+                await ws.send_json({
+                    "type": "terminate",
+                    "payload": {"reason": reason},
+                })
+                logger.info(f"Sent terminate to {worker_name}: {reason}")
+            except Exception:
+                logger.warning(f"Failed to send terminate to {worker_name}")
+        self.unregister(worker_name)
+
+    async def terminate_worker_for_session(self, session_id: str, reason: str):
+        worker_name = self._session_worker.get(session_id)
+        if worker_name:
+            await self.terminate_worker(worker_name, reason)
 
     def list_workers(self) -> list[dict]:
-        busy = self.busy_worker_names()
         return [
-            {"name": n, "capabilities": self.capabilities.get(n, []), "busy": n in busy}
+            {
+                "name": n,
+                "capabilities": self.capabilities.get(n, []),
+                "session_id": self._worker_session.get(n),
+            }
             for n in self.workers
         ]
 
@@ -259,6 +354,9 @@ async def _session_reaper():
         expired = [s for s in session_manager.all_sessions() if s.expires_at < now]
         for state in expired:
             logger.info(f"Expiring session {state.session_id}")
+            await worker_pool.terminate_worker_for_session(
+                state.session_id, "session expired"
+            )
             state.cleanup()
             session_manager.remove(state.session_id)
             async with async_session() as db:
@@ -295,33 +393,35 @@ async def api_list_sessions():
         out = []
         for s in sessions:
             sid = str(s.id)
-            state = session_manager.get(sid)
-            if state and state.active_llm_task and not state.active_llm_task.done():
-                status = "active"
-            elif s.status == "expired":
-                status = "expired"
-            elif state and state.browser_ws is not None:
-                status = "connected"
-            else:
-                status = "idle"
+            has_worker = worker_pool.get_worker_for_session(sid) is not None
             out.append({
                 "id": sid,
-                "status": status,
+                "status": s.status,
+                "has_worker": has_worker,
                 "created_at": s.created_at.isoformat(),
                 "last_active_at": s.last_active_at.isoformat() if s.last_active_at else None,
             })
         return {"sessions": out}
 
 
+@app.get("/api/capacity")
+async def api_capacity():
+    total = len(worker_pool.workers)
+    bound = len(worker_pool._worker_session)
+    return {"available": total - bound, "total": total}
+
+
 @app.delete("/api/sessions/{session_id}")
 async def api_delete_session(session_id: str):
     sid = uuid.UUID(session_id)
+    await worker_pool.terminate_worker_for_session(session_id, "session killed")
     session_manager.remove(session_id)
     async with async_session() as db:
-        await db.execute(delete(Message).where(Message.session_id == sid))
-        await db.execute(delete(Session).where(Session.id == sid))
-        await db.commit()
-    return {"deleted": session_id}
+        sess = await db.get(Session, sid)
+        if sess:
+            sess.status = "past"
+            await db.commit()
+    return {"killed": session_id}
 
 
 @app.get("/api/sessions/{session_id}/messages")
@@ -365,6 +465,14 @@ async def ws_chat(websocket: WebSocket, session_id: str):
     async with async_session() as db:
         existing = await db.get(Session, sid)
         if not existing:
+            available = len(worker_pool.workers) - len(worker_pool._worker_session)
+            if available <= 0:
+                await websocket.send_json({
+                    "type": "error",
+                    "content": "No available workers. All workers are bound to sessions. Delete a session to free one up.",
+                })
+                await websocket.close(code=4001, reason="No available workers")
+                return
             db.add(Session(id=sid, status="active", last_active_at=now))
             await db.commit()
         else:
@@ -435,13 +543,6 @@ async def ws_chat(websocket: WebSocket, session_id: str):
                 )
     except WebSocketDisconnect:
         state.detach_browser()
-        async with async_session() as db:
-            sess = await db.get(Session, sid)
-            if sess:
-                sess.status = "disconnected"
-                sess.last_active_at = state.last_active_at
-                sess.expires_at = state.expires_at
-                await db.commit()
         logger.info(f"Browser disconnected from session {session_id}")
 
 
@@ -476,13 +577,16 @@ async def handle_user_message(state: SessionState, content: str):
                 msg["content"] = m.content or ""
             messages.append(msg)
 
-        workers = worker_pool.list_workers()
-        worker_desc = ", ".join(f"{w['name']} ({', '.join(w['capabilities'])})" for w in workers) or "none"
+        bound_worker = worker_pool.get_worker_for_session(state.session_id)
+        if bound_worker:
+            worker_desc = f"You are bound to {bound_worker}."
+        else:
+            worker_desc = "You will be assigned a dedicated worker on your first tool call."
         system_msg = (
-            "You are a helpful assistant with access to remote worker machines. "
-            f"Connected workers: {worker_desc}. "
-            "Use the provided tools to execute commands or get info from workers. "
-            "When the user asks to run something on a specific worker, pass the worker_name parameter."
+            "You are a helpful assistant with access to a remote worker machine. "
+            f"{worker_desc} "
+            "Use the provided tools to execute commands or get system info. "
+            "Do not pass the worker_name parameter -- it is handled automatically."
         )
         messages.insert(0, {"role": "system", "content": system_msg})
 
@@ -570,7 +674,7 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
             dispatched_worker = ""
             for attempt in range(max_retries + 1):
                 dispatched_worker, result = await worker_pool.dispatch_tool_call(
-                    tc.id, fn_name, fn_args.copy()
+                    tc.id, fn_name, fn_args.copy(), session_id=state.session_id,
                 )
                 if dispatched_worker:
                     await state.send_to_browser({

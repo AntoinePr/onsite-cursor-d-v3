@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Remote Tool Execution</title>
+  <title>ExeCursor</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -25,7 +25,7 @@
       gap: 12px;
     }
 
-    header h1 { font-size: 15px; font-weight: 600; color: #a78bfa; }
+    header h1 { font-size: 30px; font-weight: 600; color: #a78bfa; }
 
     #connection-dot {
       width: 8px; height: 8px; border-radius: 50%;
@@ -237,9 +237,23 @@
       background: #4ade80;
       flex-shrink: 0;
     }
-    .worker-dot.busy { background: #facc15; }
+    .worker-dot.bound { background: #fb923c; }
+
+    .session-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #4ade80;
+      flex-shrink: 0;
+    }
 
     .worker-card .name { font-size: 13px; font-weight: 500; }
+
+    .worker-card .bound-tag {
+      font-size: 9px;
+      color: #fb923c;
+      font-family: 'SF Mono', Menlo, monospace;
+      margin-left: auto;
+    }
 
     .cap-tag {
       font-size: 9px;
@@ -284,20 +298,22 @@
       flex-shrink: 0;
     }
     .session-status-badge.active { background: #1e3a2f; color: #4ade80; }
-    .session-status-badge.connected { background: #1e2a3a; color: #60a5fa; }
-    .session-status-badge.idle { background: #2a2a2e; color: #888; }
+    .session-status-badge.past { background: #2a2a2e; color: #888; }
     .session-status-badge.expired { background: #3a1e1e; color: #f87171; }
 
-    .session-delete-btn {
-      background: none;
-      border: none;
-      color: #666;
-      cursor: pointer;
-      font-size: 14px;
-      padding: 0 2px;
+    .session-kill-btn {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      text-transform: uppercase;
       flex-shrink: 0;
+      background: #3a1e1e;
+      color: #f87171;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
     }
-    .session-delete-btn:hover { color: #f87171; }
+    .session-kill-btn:hover { background: #4a2020; color: #ef4444; }
 
     .new-session-btn {
       width: 100%;
@@ -313,17 +329,43 @@
     .new-session-btn:hover { background: #333355; }
 
     .no-items { color: #555; font-size: 12px; text-align: center; padding: 12px; }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #555;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
   <header>
-    <div id="connection-dot"></div>
-    <h1>Remote Tool Execution</h1>
+    <div id="connection-dot" style="display:none;"></div>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" style="height: 56px; width: 56px; flex-shrink: 0;">
+      <rect width="64" height="64" rx="8" fill="#1a1a2e"/>
+      <circle cx="32" cy="30" r="20" fill="none" stroke="#c0c0c0" stroke-width="2"/>
+      <circle cx="24" cy="26" r="6" fill="#1a1a2e" stroke="#c0c0c0" stroke-width="1.5"/>
+      <circle cx="24" cy="26" r="3" fill="#f87171"/>
+      <circle cx="40" cy="26" r="6" fill="#1a1a2e" stroke="#c0c0c0" stroke-width="1.5"/>
+      <circle cx="40" cy="26" r="3" fill="#a78bfa"/>
+      <line x1="22" y1="16" x2="26" y2="20" stroke="#c0c0c0" stroke-width="1.5"/>
+      <line x1="42" y1="16" x2="38" y2="20" stroke="#c0c0c0" stroke-width="1.5"/>
+      <path d="M24 38 L28 36 L32 38 L36 36 L40 38" fill="none" stroke="#c0c0c0" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="28" y1="36" x2="28" y2="39" stroke="#c0c0c0" stroke-width="1"/>
+      <line x1="32" y1="35" x2="32" y2="39" stroke="#c0c0c0" stroke-width="1"/>
+      <line x1="36" y1="36" x2="36" y2="39" stroke="#c0c0c0" stroke-width="1"/>
+      <path d="M26 30 L32 32 L38 30" fill="none" stroke="#c0c0c0" stroke-width="1.2"/>
+    </svg>
+    <h1>ExeCursor</h1>
   </header>
 
   <div class="main-layout">
     <div class="chat-area">
-      <div id="chat-container"></div>
+      <div id="chat-container">
+        <div id="empty-state" class="empty-state">Create a new session to start</div>
+      </div>
       <div id="input-area">
         <input type="text" id="message-input" placeholder="Ask something... (e.g. 'run uname -a on worker-1')" autocomplete="off" />
         <button id="send-btn">Send</button>
@@ -335,9 +377,13 @@
         <div class="sidebar-panel-header">Workers <span id="worker-count">0</span></div>
         <div class="sidebar-panel-body" id="workers-list"></div>
       </div>
-      <div class="sidebar-panel" style="flex: 1;">
+      <div class="sidebar-panel" style="flex: 0 0 auto;">
         <div class="sidebar-panel-header">Sessions</div>
         <div class="sidebar-panel-body" id="sessions-list"></div>
+      </div>
+      <div class="sidebar-panel" style="flex: 1;">
+        <div class="sidebar-panel-header">Past Sessions</div>
+        <div class="sidebar-panel-body" id="past-sessions-list"></div>
       </div>
     </div>
   </div>
@@ -350,12 +396,11 @@
     const workersList = document.getElementById('workers-list');
     const workerCount = document.getElementById('worker-count');
     const sessionsList = document.getElementById('sessions-list');
+    const pastSessionsList = document.getElementById('past-sessions-list');
+
+    let workersAvailable = 0;
 
     let sessionId = localStorage.getItem('sessionId');
-    if (!sessionId) {
-      sessionId = crypto.randomUUID();
-      localStorage.setItem('sessionId', sessionId);
-    }
 
     let ws = null;
     let isProcessing = false;
@@ -380,7 +425,7 @@
 
       ws.onclose = () => {
         connectionDot.className = '';
-        setTimeout(connect, 2000);
+        if (!viewingPastSession && sessionId) setTimeout(connect, 2000);
       };
 
       ws.onerror = () => {};
@@ -525,9 +570,14 @@
 
     function setProcessing(value) {
       isProcessing = value;
-      sendBtn.disabled = value;
-      messageInput.disabled = value;
-      if (!value) messageInput.focus();
+      if (viewingPastSession || !sessionId) {
+        sendBtn.disabled = true;
+        messageInput.disabled = true;
+      } else {
+        sendBtn.disabled = value;
+        messageInput.disabled = value;
+        if (!value) messageInput.focus();
+      }
     }
 
     function sendMessage() {
@@ -546,15 +596,24 @@
         const res = await fetch('/api/workers');
         const data = await res.json();
         workerCount.textContent = data.workers.length;
+        workersAvailable = data.workers.filter(w => !w.session_id).length;
         if (data.workers.length === 0) {
           workersList.innerHTML = '<div class="no-items">No workers connected</div>';
         } else {
-          workersList.innerHTML = data.workers.map(w => `
+          data.workers.sort((a, b) => {
+            const numA = parseInt(a.name.replace(/\D/g, '')) || 0;
+            const numB = parseInt(b.name.replace(/\D/g, '')) || 0;
+            return numA - numB;
+          });
+          workersList.innerHTML = data.workers.map(w => {
+            const isBound = !!w.session_id;
+            const displayName = w.name.replace(/^worker-(\d+)$/i, 'Worker $1');
+            return `
             <div class="worker-card">
-              <span class="worker-dot ${w.busy ? 'busy' : ''}"></span>
-              <span class="name">${w.name}</span>
-            </div>
-          `).join('');
+              <span class="worker-dot ${isBound ? 'bound' : ''}"></span>
+              <span class="name">${displayName}</span>
+            </div>`;
+          }).join('');
         }
       } catch {
         workersList.innerHTML = '<div class="no-items">Error loading</div>';
@@ -567,53 +626,121 @@
       try {
         const res = await fetch('/api/sessions');
         const data = await res.json();
-        let html = '<button class="new-session-btn" onclick="newSession()">+ New Session</button>';
-        if (data.sessions.length === 0) {
-          html += '<div class="no-items">No sessions yet</div>';
+
+        const activeSessions = data.sessions.filter(s => s.status === 'active');
+        const pastSessions = data.sessions.filter(s => s.status !== 'active');
+
+        const canCreate = workersAvailable > 0;
+        let activeHtml = canCreate
+          ? '<button class="new-session-btn" onclick="newSession()">+ New Session</button>'
+          : '<button class="new-session-btn" disabled style="opacity:0.4;cursor:not-allowed;">All workers busy</button>';
+
+        if (activeSessions.length === 0) {
+          activeHtml += '<div class="no-items">No active sessions</div>';
         } else {
-          for (const s of data.sessions) {
-            const isActive = s.id === sessionId;
-            const shortId = s.id.slice(0, 8);
-            html += `
-              <div class="session-card ${isActive ? 'active' : ''}" onclick="switchSession('${s.id}')">
-                <span class="session-id">${shortId}</span>
-                <span class="session-status-badge ${s.status}">${s.status}</span>
-                <button class="session-delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete">&times;</button>
-              </div>`;
+          for (const s of activeSessions) {
+            const isCurrent = s.id === sessionId;
+            activeHtml += renderSessionCard(s, isCurrent);
           }
         }
-        sessionsList.innerHTML = html;
+        sessionsList.innerHTML = activeHtml;
+
+        if (pastSessions.length === 0) {
+          pastSessionsList.innerHTML = '<div class="no-items">No past sessions</div>';
+        } else {
+          pastSessionsList.innerHTML = pastSessions.map(s => renderSessionCard(s, s.id === sessionId)).join('');
+        }
       } catch {
         sessionsList.innerHTML = '<div class="no-items">Error loading</div>';
+        pastSessionsList.innerHTML = '';
       }
     }
 
-    function newSession() {
+    function renderSessionCard(s, isCurrent) {
+      const shortId = s.id.slice(0, 8);
+      const isActive = s.status === 'active';
+      const dot = isActive ? '<span class="session-dot"></span>' : '';
+      const killBtn = isActive
+        ? `<button class="session-kill-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Kill session">Kill</button>`
+        : '';
+      return `
+        <div class="session-card ${isCurrent ? 'active' : ''}" onclick="switchSession('${s.id}', '${s.status}')">
+          ${dot}
+          <span class="session-id">${shortId}</span>
+          ${killBtn}
+        </div>`;
+    }
+
+    async function newSession() {
+      if (workersAvailable <= 0) {
+        addMessage('No available workers. Delete a session to free one up.', 'status');
+        return;
+      }
+      viewingPastSession = false;
       sessionId = crypto.randomUUID();
       localStorage.setItem('sessionId', sessionId);
       chatContainer.innerHTML = '';
       renderedMessageIds.clear();
+      hideEmptyState();
+      messageInput.disabled = false;
+      sendBtn.disabled = false;
+      messageInput.placeholder = "Ask something... (e.g. 'run uname -a on worker-1')";
       if (ws) ws.close();
       connect();
       refreshSessions();
     }
 
-    function switchSession(id) {
+    let viewingPastSession = false;
+
+    function switchSession(id, status) {
       if (id === sessionId) return;
       sessionId = id;
       localStorage.setItem('sessionId', id);
       chatContainer.innerHTML = '';
       renderedMessageIds.clear();
-      setProcessing(false);
-      if (ws) ws.close();
-      connect();
+      hideEmptyState();
+
+      if (status && status !== 'active') {
+        viewingPastSession = true;
+        if (ws) { ws.onclose = null; ws.close(); ws = null; }
+        viewPastSession(id);
+      } else {
+        viewingPastSession = false;
+        if (ws) ws.close();
+        messageInput.disabled = false;
+        sendBtn.disabled = false;
+        messageInput.placeholder = "Ask something... (e.g. 'run uname -a on worker-1')";
+        connect();
+      }
       refreshSessions();
+    }
+
+    async function viewPastSession(id) {
+      connectionDot.className = '';
+      messageInput.disabled = true;
+      sendBtn.disabled = true;
+      messageInput.placeholder = 'Read-only: this session has ended';
+      try {
+        const res = await fetch(`/api/sessions/${id}/messages`);
+        const data = await res.json();
+        renderHistory(data.messages);
+      } catch {
+        addMessage('Failed to load session history', 'status');
+      }
     }
 
     async function deleteSession(id) {
       await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-      if (id === sessionId) newSession();
-      else refreshSessions();
+      if (id === sessionId) {
+        sessionId = null;
+        localStorage.removeItem('sessionId');
+        if (ws) { ws.onclose = null; ws.close(); ws = null; }
+        chatContainer.innerHTML = '';
+        renderedMessageIds.clear();
+        showEmptyState();
+      }
+      refreshWorkers();
+      refreshSessions();
     }
 
     // ── Init ──
@@ -626,7 +753,29 @@
     setInterval(refreshWorkers, 5000);
     setInterval(refreshSessions, 5000);
 
-    connect();
+    function showEmptyState() {
+      const el = document.getElementById('empty-state');
+      if (!el) {
+        chatContainer.innerHTML = '<div id="empty-state" class="empty-state">Create a new session to start</div>';
+      }
+      messageInput.disabled = true;
+      sendBtn.disabled = true;
+      messageInput.placeholder = 'Create a new session to start';
+    }
+
+    function hideEmptyState() {
+      const el = document.getElementById('empty-state');
+      if (el) el.remove();
+    }
+
+    refreshWorkers();
+    refreshSessions();
+    if (sessionId) {
+      hideEmptyState();
+      connect();
+    } else {
+      showEmptyState();
+    }
   </script>
 </body>
 </html>

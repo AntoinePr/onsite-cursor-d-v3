@@ -4,7 +4,7 @@ import logging
 import os
 import platform
 import subprocess
-import time
+import sys
 
 import websockets
 
@@ -14,10 +14,10 @@ logger = logging.getLogger("worker")
 CONTROL_PLANE_URL = os.getenv("CONTROL_PLANE_URL", "ws://localhost:8000/ws/worker")
 WORKER_NAME = os.getenv("WORKER_NAME", "worker-unknown")
 
-CAPABILITIES = ["execute_shell", "get_system_info"]
+CAPABILITIES = ["bash", "read_file", "write_file", "get_system_info"]
 
 
-def execute_shell(command: str) -> str:
+def bash(command: str) -> str:
     try:
         result = subprocess.run(
             command,
@@ -40,6 +40,30 @@ def execute_shell(command: str) -> str:
         return f"[error] {e}"
 
 
+def read_file(path: str) -> str:
+    try:
+        with open(path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"[error] File not found: {path}"
+    except PermissionError:
+        return f"[error] Permission denied: {path}"
+    except Exception as e:
+        return f"[error] {e}"
+
+
+def write_file(path: str, content: str) -> str:
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+        return f"OK: wrote {len(content)} bytes to {path}"
+    except PermissionError:
+        return f"[error] Permission denied: {path}"
+    except Exception as e:
+        return f"[error] {e}"
+
+
 def get_system_info() -> str:
     info = {
         "hostname": platform.node(),
@@ -54,7 +78,9 @@ def get_system_info() -> str:
 
 
 TOOL_HANDLERS = {
-    "execute_shell": lambda args: execute_shell(args.get("command", "echo 'no command'")),
+    "bash": lambda args: bash(args.get("command", "echo 'no command'")),
+    "read_file": lambda args: read_file(args.get("path", "")),
+    "write_file": lambda args: write_file(args.get("path", ""), args.get("content", "")),
     "get_system_info": lambda args: get_system_info(),
 }
 
@@ -123,6 +149,10 @@ async def connect():
                             asyncio.create_task(
                                 handle_tool_call(ws, message["payload"])
                             )
+                        elif message.get("type") == "terminate":
+                            reason = message.get("payload", {}).get("reason", "unknown")
+                            logger.info(f"[{WORKER_NAME}] Received terminate: {reason}")
+                            sys.exit(0)
                         elif message.get("type") == "heartbeat_ack":
                             pass
                         else:

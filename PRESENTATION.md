@@ -105,18 +105,6 @@ sequenceDiagram
 
 ---
 
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Control Plane | Python 3.12, FastAPI, asyncio, websockets, SQLAlchemy + asyncpg |
-| Database | PostgreSQL 16 |
-| Workers | Python 3.12, websockets client, subprocess |
-| UI | Single-file HTML/JS (served by FastAPI, no build step) |
-| Infra | Docker Compose (6 services) |
-
----
-
 ## DB Tables
 
 ```mermaid
@@ -161,7 +149,7 @@ erDiagram
 
 ---
 
-## Failure Modes
+## System behaviors
 
 | Name | Description | Behavior |
 |------|-------------|----------|
@@ -169,3 +157,4 @@ erDiagram
 | Control plane failure | The control plane process crashes or restarts | |
 | Tool call loss | A tool call request is sent but never reaches the worker (network drop, WS disconnect before delivery) | |
 | Duplicate tool call | The same tool call is dispatched more than once (e.g. retry fires before late ACK arrives) | |
+| User disconnects | The user closes the browser or loses connectivity | Keep sandboxes active for 1 hour before tearing them down |
