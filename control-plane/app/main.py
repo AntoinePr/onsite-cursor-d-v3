@@ -563,8 +563,13 @@ async def api_list_sessions():
             sid = str(s.id)
             has_worker = worker_pool.get_worker_for_session(sid) is not None
             status = s.status
-            if s.status == "active" and not has_worker and session_manager.get(sid) is not None:
-                status = "failed"
+            if s.status == "active" and not has_worker:
+                rebound = await worker_pool.bind_available_worker(sid)
+                if rebound:
+                    has_worker = True
+                    logger.info(f"Auto-rebound {rebound} to orphaned session {sid[:8]}")
+                else:
+                    status = "failed"
             out.append({
                 "id": sid,
                 "name": s.name,

@@ -294,7 +294,7 @@
       background: #4ade80;
       flex-shrink: 0;
     }
-    .session-dot.failed { background: #f87171; }
+    .session-dot.disconnected { background: #f87171; }
 
     .worker-card .name { font-size: 13px; font-weight: 500; }
 
@@ -802,8 +802,8 @@
     function renderSessionCard(s, isCurrent) {
       const displayName = s.name || s.id.slice(0, 8);
       const isActive = s.status === 'active' || s.status === 'failed';
-      const dotClass = s.status === 'failed' ? 'session-dot failed' : 'session-dot';
-      const dot = isActive ? `<span class="${dotClass}"></span>` : '';
+      const dotClass = (s.status === 'failed' || !isActive) ? 'session-dot disconnected' : 'session-dot';
+      const dot = `<span class="${dotClass}"></span>`;
       const killBtn = isActive
         ? `<button class="session-kill-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Kill session">Kill</button>`
         : '';
