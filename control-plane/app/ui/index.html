@@ -390,6 +390,24 @@
       font-size: 14px;
     }
 
+    .cost-panel-body {
+      padding: 10px 14px;
+      font-family: 'SF Mono', Menlo, monospace;
+      font-size: 12px;
+    }
+
+    .cost-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      color: #aaa;
+    }
+
+    .cost-row .cost-label { color: #888; }
+    .cost-row .cost-value { color: #4ade80; font-weight: 600; }
+    .cost-row.total { border-top: 1px solid #2a2a3e; margin-top: 4px; padding-top: 6px; }
+    .cost-row.total .cost-value { color: #a78bfa; font-size: 14px; }
+
     .sidebar-nav-tab {
       padding: 10px 14px;
       font-size: 11px;
@@ -480,38 +498,16 @@
       margin-bottom: 12px;
     }
 
-    .chart-legend {
-      display: flex;
-      gap: 16px;
-      margin-bottom: 8px;
-      font-size: 11px;
-      color: #888;
-    }
-
-    .chart-legend .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .legend-swatch {
-      width: 12px;
-      height: 12px;
-      border-radius: 2px;
-      flex-shrink: 0;
-    }
-
     .chart-wrapper {
       flex: 1;
-      min-height: 200px;
+      min-height: 300px;
       position: relative;
     }
-
-    .chart-wrapper canvas {
-      width: 100% !important;
-      height: 100% !important;
-    }
   </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+  <script crossorigin src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
 </head>
 <body>
   <header>
@@ -563,6 +559,19 @@
           <div class="sidebar-panel-header">Past Sessions</div>
           <div class="sidebar-panel-body" id="past-sessions-list"></div>
         </div>
+        <div class="sidebar-panel" style="flex: 0 0 auto;">
+          <div class="sidebar-panel-header">Usage & Cost</div>
+          <div class="sidebar-panel-body cost-panel-body" id="cost-panel">
+            <div class="cost-row">
+              <span class="cost-label">Tokens</span>
+              <span class="cost-value" id="cost-tokens">0</span>
+            </div>
+            <div class="cost-row total">
+              <span class="cost-label">Total Cost</span>
+              <span class="cost-value" id="cost-total">$0.000000</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -582,13 +591,7 @@
       </div>
       <div class="chart-container">
         <h3>Cost per minute (last 15 min)</h3>
-        <div class="chart-legend">
-          <div class="legend-item"><span class="legend-swatch" style="background: #6d28d9;"></span> Cost / min</div>
-          <div class="legend-item"><span class="legend-swatch" style="background: #4ade80;"></span> Cumulative</div>
-        </div>
-        <div class="chart-wrapper">
-          <canvas id="cost-chart"></canvas>
-        </div>
+        <div class="chart-wrapper" id="recharts-mount"></div>
       </div>
     </div>
   </div>
@@ -605,12 +608,14 @@
 
     const dashTotalCost = document.getElementById('dash-total-cost');
     const dashTotalTokens = document.getElementById('dash-total-tokens');
+    const costTokensEl = document.getElementById('cost-tokens');
+    const costTotalEl = document.getElementById('cost-total');
     const costTab = document.getElementById('cost-tab');
     const sessionsTab = document.getElementById('sessions-tab');
     const sessionsPanels = document.getElementById('sessions-panels');
     const costDashboard = document.getElementById('cost-dashboard');
     const chatArea = document.querySelector('.chat-area');
-    const costCanvas = document.getElementById('cost-chart');
+    const rechartsMount = document.getElementById('recharts-mount');
 
     let costHistory = [];
     let costDashboardVisible = false;
@@ -652,15 +657,17 @@
 
     function connectCostWs() {
       if (costWs) { costWs.onclose = null; costWs.close(); costWs = null; }
-      if (!sessionId) return;
+      const wsSessionId = sessionId || '_all';
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      costWs = new WebSocket(`${protocol}//${location.hostname}:8002/ws/costs/${sessionId}`);
+      costWs = new WebSocket(`${protocol}//${location.hostname}:8002/ws/costs/${wsSessionId}`);
       costWs.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'cost_update') {
           if (data.cumulative) {
             dashTotalCost.textContent = '$' + data.cumulative.total_cost.toFixed(6);
             dashTotalTokens.textContent = data.cumulative.total_tokens.toLocaleString();
+            costTokensEl.textContent = data.cumulative.total_tokens.toLocaleString();
+            costTotalEl.textContent = '$' + data.cumulative.total_cost.toFixed(6);
           }
           if (data.history) {
             costHistory = data.history;
@@ -675,6 +682,8 @@
     function resetCostPanel() {
       dashTotalCost.textContent = '$0.000000';
       dashTotalTokens.textContent = '0';
+      costTokensEl.textContent = '0';
+      costTotalEl.textContent = '$0.000000';
       costHistory = [];
       if (costDashboardVisible) renderCostChart();
     }
@@ -709,117 +718,83 @@
       }
     });
 
-    function renderCostChart() {
-      const canvas = costCanvas;
-      const wrapper = canvas.parentElement;
-      const dpr = window.devicePixelRatio || 1;
-      const w = wrapper.clientWidth;
-      const h = wrapper.clientHeight;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = w + 'px';
-      canvas.style.height = h + 'px';
-
-      const ctx = canvas.getContext('2d');
-      ctx.scale(dpr, dpr);
-      ctx.clearRect(0, 0, w, h);
-
-      const data = costHistory.length ? costHistory : [];
-      const n = data.length || 15;
-
-      const pad = { top: 20, right: 60, bottom: 40, left: 12 };
-      const chartW = w - pad.left - pad.right;
-      const chartH = h - pad.top - pad.bottom;
-
-      if (chartW <= 0 || chartH <= 0) return;
-
-      const maxBarCost = Math.max(...data.map(d => d.cost), 0.000001);
-      const maxCumCost = Math.max(...data.map(d => d.cumulative), 0.000001);
-
-      const barWidth = Math.max(Math.floor(chartW / n) - 4, 2);
-      const gap = (chartW - barWidth * n) / (n + 1);
-
-      ctx.strokeStyle = '#2a2a3e';
-      ctx.lineWidth = 1;
-      for (let i = 0; i <= 4; i++) {
-        const y = pad.top + (chartH / 4) * i;
-        ctx.beginPath();
-        ctx.moveTo(pad.left, y);
-        ctx.lineTo(w - pad.right, y);
-        ctx.stroke();
-      }
-
-      for (let i = 0; i < n; i++) {
-        const d = data[i] || { cost: 0, cumulative: 0, minute: '' };
-        const x = pad.left + gap + i * (barWidth + gap);
-        const barH = (d.cost / maxBarCost) * chartH;
-        const y = pad.top + chartH - barH;
-
-        ctx.fillStyle = '#6d28d9';
-        ctx.beginPath();
-        const radius = Math.min(3, barWidth / 2);
-        ctx.moveTo(x, y + radius);
-        ctx.arcTo(x, y, x + radius, y, radius);
-        ctx.arcTo(x + barWidth, y, x + barWidth, y + radius, radius);
-        ctx.lineTo(x + barWidth, pad.top + chartH);
-        ctx.lineTo(x, pad.top + chartH);
-        ctx.closePath();
-        ctx.fill();
-
-        if (i % 3 === 0 && d.minute) {
-          ctx.fillStyle = '#555';
-          ctx.font = '10px -apple-system, sans-serif';
-          ctx.textAlign = 'center';
-          const label = d.minute.slice(11, 16);
-          ctx.fillText(label, x + barWidth / 2, pad.top + chartH + 16);
-        }
-      }
-
-      ctx.fillStyle = '#555';
-      ctx.font = '10px SF Mono, Menlo, monospace';
-      ctx.textAlign = 'right';
-      for (let i = 0; i <= 4; i++) {
-        const y = pad.top + (chartH / 4) * i;
-        const val = maxBarCost * (1 - i / 4);
-        ctx.fillText(formatCost(val), w - pad.right + 50, y + 3);
-      }
-
-      if (data.length > 1) {
-        ctx.beginPath();
-        ctx.strokeStyle = '#4ade80';
-        ctx.lineWidth = 2;
-        ctx.lineJoin = 'round';
-        for (let i = 0; i < data.length; i++) {
-          const d = data[i];
-          const x = pad.left + gap + i * (barWidth + gap) + barWidth / 2;
-          const y = pad.top + chartH - (d.cumulative / maxCumCost) * chartH;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-
-        for (let i = 0; i < data.length; i++) {
-          const d = data[i];
-          const x = pad.left + gap + i * (barWidth + gap) + barWidth / 2;
-          const y = pad.top + chartH - (d.cumulative / maxCumCost) * chartH;
-          ctx.beginPath();
-          ctx.arc(x, y, 3, 0, Math.PI * 2);
-          ctx.fillStyle = '#4ade80';
-          ctx.fill();
-        }
-      }
-    }
+    const rechartsRoot = ReactDOM.createRoot(rechartsMount);
 
     function formatCost(v) {
-      if (v === 0) return '$0';
+      if (v == null || v === 0) return '$0';
       if (v < 0.001) return '$' + v.toFixed(6);
       if (v < 1) return '$' + v.toFixed(4);
       return '$' + v.toFixed(2);
     }
 
-    window.addEventListener('resize', () => {
-      if (costDashboardVisible) renderCostChart();
-    });
+    function renderCostChart() {
+      const {
+        ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
+        CartesianGrid, Tooltip, Legend
+      } = Recharts;
+
+      const data = (costHistory.length ? costHistory : []).map(d => ({
+        time: d.minute ? d.minute.slice(11, 16) : '',
+        cost: d.cost,
+        cumulative: d.cumulative,
+      }));
+
+      const CustomTooltip = ({ active, payload, label }) => {
+        if (!active || !payload || !payload.length) return null;
+        const costVal = payload.find(p => p.dataKey === 'cost');
+        const cumVal = payload.find(p => p.dataKey === 'cumulative');
+        return React.createElement('div', {
+          style: {
+            background: '#1a1a2e', border: '1px solid #2a2a3e',
+            borderRadius: '6px', padding: '10px 14px', fontSize: '12px',
+            fontFamily: "'SF Mono', Menlo, monospace",
+          }
+        },
+          React.createElement('div', { style: { color: '#888', marginBottom: '6px', fontWeight: 600 } }, label),
+          costVal && React.createElement('div', { style: { color: '#a78bfa', marginBottom: '3px' } },
+            'Cost/min: ', formatCost(costVal.value)),
+          cumVal && React.createElement('div', { style: { color: '#4ade80' } },
+            'Cumulative: ', formatCost(cumVal.value))
+        );
+      };
+
+      const chart = React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+        React.createElement(ComposedChart, { data, margin: { top: 8, right: 12, left: 12, bottom: 4 } },
+          React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#2a2a3e', vertical: false }),
+          React.createElement(XAxis, {
+            dataKey: 'time', tick: { fill: '#555', fontSize: 10 },
+            axisLine: { stroke: '#2a2a3e' }, tickLine: false,
+          }),
+          React.createElement(YAxis, {
+            yAxisId: 'cost', tick: { fill: '#555', fontSize: 10 },
+            axisLine: false, tickLine: false,
+            tickFormatter: formatCost, width: 70,
+          }),
+          React.createElement(YAxis, {
+            yAxisId: 'cum', orientation: 'right',
+            tick: { fill: '#555', fontSize: 10 },
+            axisLine: false, tickLine: false,
+            tickFormatter: formatCost, width: 70,
+          }),
+          React.createElement(Tooltip, { content: React.createElement(CustomTooltip), cursor: { fill: 'rgba(167,139,250,0.08)' } }),
+          React.createElement(Legend, {
+            wrapperStyle: { fontSize: '11px', color: '#888', paddingTop: '4px' },
+            formatter: (value) => value === 'cost' ? 'Cost / min' : 'Cumulative',
+          }),
+          React.createElement(Bar, {
+            yAxisId: 'cost', dataKey: 'cost', fill: '#6d28d9',
+            radius: [3, 3, 0, 0], maxBarSize: 40,
+          }),
+          React.createElement(Line, {
+            yAxisId: 'cum', dataKey: 'cumulative', type: 'monotone',
+            stroke: '#4ade80', strokeWidth: 2, dot: { r: 3, fill: '#4ade80' },
+            activeDot: { r: 5, fill: '#4ade80', stroke: '#0f0f0f', strokeWidth: 2 },
+          }),
+        )
+      );
+
+      rechartsRoot.render(chart);
+    }
 
     function handleMessage(data) {
       if (data.message_id) {

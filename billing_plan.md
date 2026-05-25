@@ -86,23 +86,43 @@ graph LR
 
 ---
 
-## Milestone 2: Tag-Based Breakdowns & Spending Limits (~90 min)
+## Milestone 2: Usage & Cost Breakdowns (~90 min)
 
-**Objective**: Make the billing system useful — users can break down costs by arbitrary dimensions and admins can enforce spending limits that block agent activity.
+**Objective**: Let users explore their usage and costs with flexible grouping and a toggle between the two views.
 
 ### Key Outcomes
 
-1. **Rich tags on every usage event** — events now carry tags like `worker_name`, `model`, `tool_name`, `session_id`, enabling multi-dimensional analysis.
-2. **Breakdown API** — a `GET /costs/breakdown?group_by=<tag>[,<tag>]` endpoint returns costs aggregated by any combination of tag dimensions, with optional `filter_tag=key:value` filtering.
-3. **Spending limits** — admins can create limits scoped to a session or globally, with configurable actions:
-   - **Warn** — pushes a warning to the browser when a threshold is approached.
-   - **Block** — stops all further LLM calls for the session and notifies the browser.
-4. **Limit enforcement in the pipeline** — after each cost record is written, the Cost Backend checks limits. If a hard limit is exceeded, it calls back to the control plane to block the session. The agent's LLM loop checks the blocked set before every call.
-5. **Enriched "Usage & Cost" tab** — the browser tab now shows a breakdown table with a dimension selector, spending limit progress bars, and warning/block alert banners.
+1. **Usage / Cost toggle** — the "Usage & Cost" tab lets users switch between viewing raw usage quantities and computed dollar costs in the graph.
+2. **Group-by dimension selector** — users can group data by one of four fixed dimensions: `provider`, `model`, `usage_type`, or `session_id`.
+3. **Breakdown API** — a `GET /costs/breakdown?group_by=<dimension>&metric=usage|cost` endpoint returns aggregated data for the selected dimension and metric.
+4. **Enriched UI** — the graph updates live as new events arrive, with the selected grouping and metric applied in real time.
 
 ### Decisions for M2
 
-- Breakdowns are powered by dynamic SQL aggregation over JSONB tags (using `jsonb_extract_path_text` in GROUP BY) — no pre-aggregation tables needed.
-- Spending limits live in the Billing DB (`spending_limits` table with scope, max_cost, action).
-- Enforcement is eventual — a usage event that crosses a limit will be the last one allowed; the block takes effect before the next LLM call.
+- Grouping is over first-class columns (`provider`, `model`, `usage_type`, `session_id`) — no JSONB tag queries yet.
+- The `metric` toggle controls whether the API sums `quantity` (usage) or `total_cost` (cost).
+- Only single-dimension grouping is supported; multi-dimension is deferred.
+
+---
+
+## Milestone 3: Spending Limits (~90 min)
+
+**Objective**: Give admins the ability to enforce spending caps that block agent activity when exceeded.
+
+### Key Outcomes
+
+1. **Spending limits** — admins can create limits scoped to a session or globally, with a configurable max cost.
+2. **Limit enforcement in the pipeline** — after each cost record is written, the Cost Backend checks limits. If a limit is exceeded, it calls back to the control plane to block the session. The agent's LLM loop checks the blocked set before every call.
+3. **Browser notifications** — when a limit is hit, the browser receives a WebSocket alert and displays a block banner.
+
+### Decisions for M3
+
+- Spending limits live in the Billing DB (`spending_limits` table with scope, max_cost).
+- Enforcement is eventual — the event that crosses a limit is the last one allowed; the block takes effect before the next LLM call.
 - The control plane exposes an internal-only `POST /internal/session/{id}/block` endpoint; the Cost Backend is the only caller.
+
+---
+
+## Future
+
+- **Arbitrary tag-based grouping** — users can group usage and costs by any number of custom tags attached to usage events, enabling fully flexible multi-dimensional analysis.
