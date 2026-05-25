@@ -26,6 +26,7 @@ class Session(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(50), default="New session")
     status = Column(String(20), default="active")  # active, disconnected, expired
+    bound_worker = Column(String(100), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_now)
     last_active_at = Column(DateTime(timezone=True), default=_now)
     expires_at = Column(DateTime(timezone=True), default=_expires)

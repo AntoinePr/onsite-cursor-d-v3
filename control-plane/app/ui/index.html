@@ -452,10 +452,6 @@
     let workersAvailable = 0;
 
     let sessionId = localStorage.getItem('sessionId');
-    if (!sessionId) {
-      sessionId = crypto.randomUUID();
-      localStorage.setItem('sessionId', sessionId);
-    }
 
     let ws = null;
     let isProcessing = false;

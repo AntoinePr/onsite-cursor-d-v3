@@ -25,6 +25,13 @@ reset-db:
 clean:
 	docker compose down -v --rmi local
 
+chaos-kill-control-plane:
+	@echo "Killing control-plane..."
+	docker compose kill control-plane
+	@echo "Restarting control-plane..."
+	docker compose up -d control-plane
+	@echo "Control plane restarted. Workers will auto-reconnect."
+
 chaos-kill-worker:
 	@SERVICE=$$(docker compose ps --services | grep worker | shuf -n 1); \
 	echo "Restarting $$SERVICE..."; \

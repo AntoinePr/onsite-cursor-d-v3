@@ -149,21 +149,31 @@ class WorkerPool:
                 ))
         logger.info(f"Worker unregistered: {name} (total: {len(self.workers)})")
 
-    def bind_worker(self, worker_name: str, session_id: str):
+    async def bind_worker(self, worker_name: str, session_id: str):
         self._worker_session[worker_name] = session_id
         self._session_worker[session_id] = worker_name
+        async with async_session() as db:
+            sess = await db.get(Session, uuid.UUID(session_id))
+            if sess:
+                sess.bound_worker = worker_name
+                await db.commit()
         logger.info(f"Bound {worker_name} to session {session_id[:8]}")
 
-    def unbind_worker(self, worker_name: str):
+    async def unbind_worker(self, worker_name: str):
         sid = self._worker_session.pop(worker_name, None)
         if sid:
             self._session_worker.pop(sid, None)
+            async with async_session() as db:
+                sess = await db.get(Session, uuid.UUID(sid))
+                if sess:
+                    sess.bound_worker = None
+                    await db.commit()
         logger.info(f"Unbound {worker_name}")
 
     def get_worker_for_session(self, session_id: str) -> str | None:
         return self._session_worker.get(session_id)
 
-    def bind_available_worker(self, session_id: str) -> str | None:
+    async def bind_available_worker(self, session_id: str) -> str | None:
         """Eagerly bind an unbound worker to a session. Returns worker name or None."""
         already = self._session_worker.get(session_id)
         if already and already in self.workers:
@@ -173,7 +183,7 @@ class WorkerPool:
         if not eligible:
             return None
         name = eligible[0]
-        self.bind_worker(name, session_id)
+        await self.bind_worker(name, session_id)
         return name
 
     def pick_worker(
@@ -215,7 +225,7 @@ class WorkerPool:
 
         worker_name, ws = target
         if worker_name not in self._worker_session and session_id:
-            self.bind_worker(worker_name, session_id)
+            await self.bind_worker(worker_name, session_id)
 
         message_id = str(uuid.uuid4())
         logger.info(f"Dispatching {function_name} (id={tool_call_id}, msg={message_id[:8]}) to {worker_name}")
@@ -390,6 +400,20 @@ session_manager = SessionManager()
 async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(ToolCallDispatch).where(
+                ToolCallDispatch.status.in_(["dispatched", "acked"])
+            )
+        )
+        stale = result.scalars().all()
+        for dispatch in stale:
+            dispatch.status = "failed"
+        if stale:
+            await db.commit()
+            logger.info(f"Startup recovery: marked {len(stale)} in-flight dispatch(es) as failed")
+
     reaper = asyncio.create_task(_session_reaper())
     dispatch_reaper = asyncio.create_task(_dispatch_reaper())
     health_checker = asyncio.create_task(_worker_health_checker())
@@ -431,6 +455,7 @@ async def _session_reaper():
                 sess = await db.get(Session, uuid.UUID(state.session_id))
                 if sess:
                     sess.status = "expired"
+                    sess.bound_worker = None
                     await db.commit()
 
 
@@ -567,13 +592,14 @@ async def api_delete_session(session_id: str):
         sess = await db.get(Session, sid)
         if sess:
             sess.status = "past"
+            sess.bound_worker = None
             await db.commit()
     return {"killed": session_id}
 
 
 @app.post("/api/sessions/{session_id}/reconnect")
 async def api_reconnect_session(session_id: str):
-    worker_name = worker_pool.bind_available_worker(session_id)
+    worker_name = await worker_pool.bind_available_worker(session_id)
     if not worker_name:
         return JSONResponse(status_code=409, content={"error": "No workers available"})
     sid = uuid.UUID(session_id)
@@ -720,12 +746,17 @@ async def ws_chat(websocket: WebSocket, session_id: str):
                 return
             db.add(Session(id=sid, status="active", last_active_at=now))
             await db.commit()
-            worker_pool.bind_available_worker(session_id)
+            await worker_pool.bind_available_worker(session_id)
         else:
             existing.status = "active"
             existing.last_active_at = now
             existing.expires_at = now + SESSION_TTL
             await db.commit()
+            if existing.bound_worker and existing.bound_worker in worker_pool.workers:
+                if existing.bound_worker not in worker_pool._worker_session:
+                    worker_pool._worker_session[existing.bound_worker] = session_id
+                    worker_pool._session_worker[session_id] = existing.bound_worker
+                    logger.info(f"Restored binding on browser reconnect: {existing.bound_worker} -> session {session_id[:8]}")
 
     state = session_manager.get_or_create(session_id)
     state.attach_browser(websocket)
@@ -1052,6 +1083,19 @@ async def ws_worker(websocket: WebSocket):
         worker_name = payload["worker_name"]
         caps = payload.get("capabilities", [])
         worker_pool.register(worker_name, websocket, caps)
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(Session).where(
+                    and_(Session.status == "active", Session.bound_worker == worker_name)
+                )
+            )
+            bound_session = result.scalar_one_or_none()
+            if bound_session:
+                sid = str(bound_session.id)
+                worker_pool._worker_session[worker_name] = sid
+                worker_pool._session_worker[sid] = worker_name
+                logger.info(f"Restored binding: {worker_name} -> session {sid[:8]}")
 
         await websocket.send_json(
             {"type": "registered", "payload": {"worker_name": worker_name}}

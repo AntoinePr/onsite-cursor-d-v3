@@ -8,6 +8,19 @@ How do we execute tools in a **customer's environment** when we can't open inbou
 
 ---
 
+## Demo Agenda
+
+1. **Architecture presentation** — how the pieces fit together
+2. **System demo** — end-to-end flow
+   - Create a session, send a message, watch tool dispatch + streaming response
+   - Show worker binding, session persistence, and reconnect
+3. **Failure modes demo** — resilience under stress
+   - Kill a worker mid-tool-call → retry on another worker
+   - Browser disconnect → reconnect with full history replay
+   - Duplicate tool call → idempotent execution (cached result)
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -57,19 +70,19 @@ sequenceDiagram
   participant DB as PostgreSQL
   participant W as Worker
 
-  Note over W,CP: Worker startup (outbound connection)
-  W->>CP: Connect WebSocket /ws/worker
-  W->>CP: Register capabilities (tool list, metadata)
-  CP->>DB: Upsert worker record (status=connected)
+  Note over CP,W: Worker startup (outbound connection)
+  W->>CP: Connect WebSocket
+  W->>CP: Register capabilities
+  CP->>CP: Store worker in-memory pool
   CP->>W: ACK registration
 
   Note over B,CP: Browser startup
-  B->>CP: GET /api/workers, /api/sessions
+  B->>CP: GET workers and sessions
   CP->>B: Worker list + session list
-  Note over B: User clicks "+ New Session"
-  B->>CP: Connect WebSocket /ws/chat/{session_id}
+  Note over B: User clicks New Session
+  B->>CP: Connect WebSocket
   CP->>DB: Create session, bind worker
-  CP->>B: Session status
+  CP->>B: Session status + history replay
 ```
 
 ---
@@ -78,30 +91,30 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-  box rgb(72,187,120) Browser
-    participant B as Browser
-  end
-  box rgb(74,144,217) Control Plane
-    participant CP as ControlPlane
-    participant DB as PostgreSQL
-  end
-  box rgb(237,137,54) Customer Env
-    participant W as Worker
-  end
+  participant B as Browser
+  participant CP as ControlPlane
+  participant DB as PostgreSQL
+  participant W as Worker
 
   Note over B,W: Initialization already complete
 
   B->>CP: User message (WebSocket)
   CP->>DB: Store message
-  CP->>CP: Call LLM (OpenAI)
+  CP->>CP: Call LLM (OpenAI, streaming)
+  CP->>B: Stream tokens (assistant_token messages)
   CP->>DB: Store assistant response + tool_calls
-  CP->>B: Stream: "calling tool X..."
-  CP->>W: Send tool_call request (via worker WS)
+  CP->>B: tool_call_start
+  CP->>DB: Create tool_call_dispatch (status=dispatched)
+  CP->>W: Send tool_call_request (message_id)
+  W->>CP: ACK (message_id, tool_call_id)
+  CP->>DB: Update dispatch (status=acked)
   W->>W: Execute tool locally
-  W->>CP: Return tool result
-  CP->>DB: Store tool result
-  CP->>CP: Call LLM with tool result
-  CP->>B: Stream final answer
+  W->>CP: Return tool_call_result
+  CP->>DB: Update dispatch (status=completed)
+  CP->>DB: Store tool result message
+  CP->>B: tool_call_result
+  CP->>CP: Call LLM with tool result (streaming)
+  CP->>B: Stream final answer tokens
 ```
 
 ---
@@ -112,7 +125,8 @@ sequenceDiagram
 erDiagram
   sessions {
     uuid id PK
-    text status "active / expired"
+    varchar name "auto-generated title"
+    text status "active / past / expired / failed"
     timestamp created_at
     timestamp last_active_at
     timestamp expires_at
@@ -121,11 +135,23 @@ erDiagram
   messages {
     uuid id PK
     uuid session_id FK
-    text role "user / assistant / tool"
+    text role "user / assistant / tool / system"
     text content
     jsonb tool_calls
     text tool_call_id
     timestamp created_at
+  }
+
+  tool_call_dispatch {
+    uuid id PK
+    text tool_call_id UK
+    uuid session_id FK
+    text worker_name
+    text status "dispatched / acked / completed / failed"
+    timestamp dispatched_at
+    timestamp acked_at
+    timestamp completed_at
+    int retry_count
   }
 
   workers {
@@ -137,7 +163,10 @@ erDiagram
   }
 
   sessions ||--o{ messages : "has"
+  sessions ||--o{ tool_call_dispatch : "has"
 ```
+
+> **Note**: The `workers` table exists in the schema but is not actively used at runtime. Worker state is managed in-memory via the `WorkerPool` class.
 
 ---
 
@@ -147,6 +176,7 @@ erDiagram
 |------|-------------|----------|
 | Worker failure | Worker crashes or disconnects mid-tool-call | Tool call is retried on another available worker (up to 2 retries) |
 | Control plane failure | Control plane process crashes or restarts | Workers auto-reconnect; sessions persist in DB and replay on reconnect |
-| Tool call loss | Tool call request never reaches worker | Detected as worker disconnect; retried on another worker |
-| Duplicate tool call | Same tool call dispatched more than once | Workers cache completed tool_call_ids and return cached results |
-| User disconnects | Browser closes or loses connectivity | Session stays active for 1 hour (TTL); auto-expired by reaper task |
+| Tool call loss | Tool call request sent but no ACK received | Dispatch reaper detects unacked dispatches after 5s timeout; marks as failed and triggers retry |
+| Duplicate tool call | Same tool call dispatched more than once | Workers cache completed tool_call_ids (60s TTL) and return cached results without re-executing |
+| User disconnects | Browser closes or loses connectivity | LLM loop keeps running; messages queue in-memory and drain on reconnect; browser auto-reconnects after 2s with full history replay |
+| Session expiry | Session idle beyond TTL | Reaper task checks every 60s; expires sessions 1 hour after last activity; terminates bound worker and marks session as expired |
