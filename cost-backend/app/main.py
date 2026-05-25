@@ -154,6 +154,7 @@ async def get_history(
     window_end: datetime,
     metric: str,
     group_by: str | None = None,
+    session_id: str | None = None,
 ) -> dict:
     trunc = _trunc_expr(granularity)
     if metric == "cost":
@@ -161,12 +162,17 @@ async def get_history(
     else:
         value_expr = "COALESCE(SUM(u.quantity), 0)"
 
-    group_col_sql = ""
     extra_select = ""
     extra_group = ""
     if group_by and group_by in ALLOWED_GROUP_BY:
         extra_select = f", u.{group_by} AS group_val"
         extra_group = f", u.{group_by}"
+
+    session_filter = ""
+    params: dict = {"window_start": window_start, "window_end": window_end}
+    if session_id:
+        session_filter = " AND u.session_id = :session_id"
+        params["session_id"] = session_id
 
     sql = f"""
         SELECT
@@ -175,16 +181,13 @@ async def get_history(
             {value_expr} AS val
         FROM costs c
         JOIN usage u ON c.usage_id = u.id
-        WHERE c.created_at >= :window_start AND c.created_at < :window_end
+        WHERE c.created_at >= :window_start AND c.created_at < :window_end{session_filter}
         GROUP BY {trunc}{extra_group}
         ORDER BY bucket
     """
 
     async with async_session() as db:
-        result = await db.execute(
-            text(sql),
-            {"window_start": window_start, "window_end": window_end},
-        )
+        result = await db.execute(text(sql), params)
         rows = result.all()
 
     preset = None
@@ -377,7 +380,10 @@ def _snap_window(range_key: str, offset: int, now: datetime) -> tuple[datetime, 
     raise ValueError(f"Unknown range: {range_key}")
 
 
-async def _history_handler(metric: str, range_key: str, offset: int, group_by: str | None):
+async def _history_handler(
+    metric: str, range_key: str, offset: int,
+    group_by: str | None, session_id: str | None,
+):
     if range_key not in RANGE_PRESETS:
         return {"error": f"Invalid range. Allowed: {list(RANGE_PRESETS.keys())}"}
     preset = RANGE_PRESETS[range_key]
@@ -390,6 +396,7 @@ async def _history_handler(metric: str, range_key: str, offset: int, group_by: s
         window_end=window_end,
         metric=metric,
         group_by=group_by,
+        session_id=session_id,
     )
     return {
         "range": range_key,
@@ -401,35 +408,37 @@ async def _history_handler(metric: str, range_key: str, offset: int, group_by: s
     }
 
 
-@app.get("/cost/history")
-async def cost_history(
-    range: str = Query("10m", alias="range"),
-    offset: int = Query(0),
-    group_by: str | None = Query(None),
-):
-    return await _history_handler("cost", range, offset, group_by)
-
-
-@app.get("/usage/history")
-async def usage_history(
-    range: str = Query("10m", alias="range"),
-    offset: int = Query(0),
-    group_by: str | None = Query(None),
-):
-    return await _history_handler("usage", range, offset, group_by)
-
-
-@app.get("/cost")
-async def get_cost_total():
-    return await get_cumulative("cost")
-
-
-@app.get("/cost/{session_id}")
+@app.get("/cost/summary/{session_id}")
 async def get_cost_session(session_id: str):
     result = await get_cumulative("cost", session_id)
     return {"session_id": session_id, **result}
 
 
-@app.get("/usage")
+@app.get("/cost/summary")
+async def get_cost_total():
+    return await get_cumulative("cost")
+
+
+@app.get("/cost")
+async def cost_history(
+    range: str = Query("10m", alias="range"),
+    offset: int = Query(0),
+    group_by: str | None = Query(None),
+    session_id: str | None = Query(None),
+):
+    return await _history_handler("cost", range, offset, group_by, session_id)
+
+
+@app.get("/usage/summary")
 async def get_usage_total():
     return await get_cumulative("usage")
+
+
+@app.get("/usage")
+async def usage_history(
+    range: str = Query("10m", alias="range"),
+    offset: int = Query(0),
+    group_by: str | None = Query(None),
+    session_id: str | None = Query(None),
+):
+    return await _history_handler("usage", range, offset, group_by, session_id)

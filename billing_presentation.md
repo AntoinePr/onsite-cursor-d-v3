@@ -142,13 +142,35 @@ Data flows through three successive shapes: the **ingestion event**, the **usage
 
 ---
 
-## Tag-Based Breakdowns
+## API Endpoints
 
-- `GET /costs/breakdown?group_by=model` — cost per model
-- `GET /costs/breakdown?group_by=session_id,model` — cost per session per model
-- `GET /costs/breakdown?group_by=worker_name&filter_tag=model:gpt-4o` — cost per worker for a specific model
+### Ingestion
 
-Powered by dynamic SQL aggregation over JSONB tags — no pre-aggregation tables needed.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/usage` | Accepts an array of usage events. Agent buffers events in-memory and flushes as a batch every 2s. |
+
+### Cost & Usage Queries
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/cost?range=10m&offset=0&group_by=model&session_id=<uuid>` | Time-bucketed cost data for the dashboard chart |
+| GET | `/usage?range=10m&offset=0&group_by=usage_type&session_id=<uuid>` | Time-bucketed usage (token) data for the dashboard chart |
+| GET | `/cost/summary` | All-time cumulative cost and token totals |
+| GET | `/cost/summary/{session_id}` | Cumulative cost for a specific session |
+| GET | `/usage/summary` | All-time cumulative token totals |
+
+### Query Parameters
+
+| Param | Values | Description |
+|-------|--------|-------------|
+| `range` | `10m`, `1h`, `1d`, `1m` | Time window for bucketed data |
+| `offset` | integer (default 0) | Navigate to previous periods (e.g. offset=1 for the previous window) |
+| `group_by` | `provider`, `model`, `usage_type`, `session_id` | Group results by a dimension |
+| `session_id` | UUID | Filter to a specific session |
+| `metric` | `cost`, `usage` | Toggle between dollar costs and raw token counts (frontend toggle) |
+
+The frontend polls `/cost` or `/usage` every 5 seconds. The `group_by` and `session_id` params are independent — users can filter to one session while grouping by usage type, or group by session across all data.
 
 ---
 

@@ -595,11 +595,15 @@
           </div>
         </div>
         <div class="toolbar-right">
+          <select class="toolbar-select" id="session-filter-select" onchange="setSessionFilter(this.value)">
+            <option value="">All Sessions</option>
+          </select>
           <select class="toolbar-select" id="group-by-select" onchange="setGroupBy(this.value)">
             <option value="">Group By: None</option>
             <option value="model">Group By: Model</option>
             <option value="usage_type">Group By: Usage Type</option>
             <option value="provider">Group By: Provider</option>
+            <option value="session_id">Group By: Session</option>
           </select>
           <select class="toolbar-select" id="metric-select" onchange="setMetric(this.value)">
             <option value="cost">Metric: Spend</option>
@@ -646,6 +650,7 @@
     let currentOffset = 0;
     let currentMetric = 'cost';
     let currentGroupBy = null;
+    let currentSessionFilter = null;
 
     let workersAvailable = 0;
     let sessionId = localStorage.getItem('sessionId');
@@ -677,9 +682,10 @@
     }
 
     async function fetchHistory() {
-      const base = currentMetric === 'cost' ? '/cost/history' : '/usage/history';
+      const base = currentMetric === 'cost' ? '/cost' : '/usage';
       let url = `http://${location.hostname}:8002${base}?range=${currentRange}&offset=${currentOffset}`;
       if (currentGroupBy) url += `&group_by=${currentGroupBy}`;
+      if (currentSessionFilter) url += `&session_id=${currentSessionFilter}`;
       try {
         const res = await fetch(url);
         const data = await res.json();
@@ -732,6 +738,28 @@
       fetchHistory();
     }
 
+    function setSessionFilter(id) {
+      currentSessionFilter = id || null;
+      fetchHistory();
+    }
+
+    async function populateSessionFilter() {
+      const sel = document.getElementById('session-filter-select');
+      try {
+        const res = await fetch('/api/sessions');
+        const data = await res.json();
+        sel.innerHTML = '<option value="">All Sessions</option>';
+        for (const s of data.sessions) {
+          const label = s.name || s.id.slice(0, 8);
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = label;
+          if (s.id === currentSessionFilter) opt.selected = true;
+          sel.appendChild(opt);
+        }
+      } catch {}
+    }
+
     function navPeriod(dir) {
       currentOffset = Math.max(0, currentOffset - dir);
       fetchHistory();
@@ -742,6 +770,7 @@
       chatArea.style.display = 'none';
       costDashboard.style.display = 'flex';
       if (pushState) history.pushState({ view: 'cost' }, '', '/usage-and-cost');
+      populateSessionFilter();
       startCostPolling();
     }
 
@@ -750,6 +779,9 @@
       costDashboard.style.display = 'none';
       chatArea.style.display = 'flex';
       if (pushState) history.pushState({ view: 'sessions' }, '', '/sessions');
+      currentSessionFilter = null;
+      const sel = document.getElementById('session-filter-select');
+      if (sel) sel.value = '';
       stopCostPolling();
     }
 
