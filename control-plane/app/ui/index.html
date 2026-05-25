@@ -18,41 +18,45 @@
 
     header {
       background: #1a1a2e;
-      padding: 12px 24px;
+      padding: 10px 20px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
       border-bottom: 1px solid #2a2a3e;
+      gap: 12px;
     }
 
-    header h1 {
-      font-size: 16px;
-      font-weight: 600;
-      color: #a78bfa;
+    header h1 { font-size: 15px; font-weight: 600; color: #a78bfa; }
+
+    #connection-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #f87171;
+      flex-shrink: 0;
+    }
+    #connection-dot.connected { background: #4ade80; }
+
+    .main-layout {
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
     }
 
-    #worker-status {
-      font-size: 13px;
-      color: #888;
-    }
-
-    .worker-badge {
-      display: inline-block;
-      background: #1e3a2f;
-      color: #4ade80;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 12px;
-      margin-left: 4px;
+    /* ── Chat area ── */
+    .chat-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      order: 2;
     }
 
     #chat-container {
       flex: 1;
       overflow-y: auto;
-      padding: 20px 24px;
+      padding: 16px 20px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
     }
 
     .message {
@@ -99,12 +103,38 @@
     }
 
     .tool-call-header {
-      color: #a78bfa;
-      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
       margin-bottom: 6px;
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
+    }
+
+    .tool-call-header .fn-name { color: #a78bfa; font-weight: 600; }
+    .tool-call-header .worker-tag {
+      color: #888;
+      font-size: 10px;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .status-indicator {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .status-indicator.pending { background: #facc15; animation: pulse 1.2s infinite; }
+    .status-indicator.running { background: #60a5fa; animation: pulse 0.8s infinite; }
+    .status-indicator.complete { background: #4ade80; }
+    .status-indicator.failed { background: #f87171; }
+    .status-indicator.retrying { background: #fb923c; animation: pulse 0.6s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
     }
 
     .tool-call-result {
@@ -114,12 +144,10 @@
       border-top: 1px solid #2a2a3e;
     }
 
-    .tool-call-error {
-      color: #f87171;
-    }
+    .tool-call-error { color: #f87171; }
 
     #input-area {
-      padding: 16px 24px;
+      padding: 12px 20px;
       background: #1a1a2e;
       border-top: 1px solid #2a2a3e;
       display: flex;
@@ -141,7 +169,7 @@
     #message-input:focus { border-color: #a78bfa; }
 
     #send-btn {
-      padding: 10px 20px;
+      padding: 10px 18px;
       background: #6d28d9;
       color: white;
       border: none;
@@ -150,41 +178,199 @@
       font-size: 14px;
       font-weight: 500;
     }
-
     #send-btn:hover { background: #7c3aed; }
     #send-btn:disabled { background: #333; cursor: not-allowed; }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 260px;
+      background: #141420;
+      border-right: 1px solid #2a2a3e;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+      order: 1;
+    }
+
+    .sidebar-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-panel + .sidebar-panel { border-top: 1px solid #2a2a3e; }
+
+    .sidebar-panel-header {
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #888;
+      background: #1a1a2e;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .sidebar-panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+    }
+
+    .worker-card {
+      padding: 8px 10px;
+      border-radius: 6px;
+      margin-bottom: 4px;
+      background: #1e1e2e;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .worker-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #4ade80;
+      flex-shrink: 0;
+    }
+    .worker-dot.busy { background: #facc15; }
+
+    .worker-card .name { font-size: 13px; font-weight: 500; }
+
+    .cap-tag {
+      font-size: 9px;
+      background: #2a2a3e;
+      color: #a78bfa;
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-left: 2px;
+    }
+
+    .session-card {
+      padding: 8px 10px;
+      border-radius: 6px;
+      margin-bottom: 4px;
+      background: #1e1e2e;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 12px;
+    }
+
+    .session-card:hover { background: #2a2a3e; }
+    .session-card.active { border: 1px solid #a78bfa; background: #1a1a30; }
+
+    .session-card .session-id {
+      font-family: 'SF Mono', Menlo, monospace;
+      font-size: 11px;
+      color: #ccc;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .session-status-badge {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    .session-status-badge.active { background: #1e3a2f; color: #4ade80; }
+    .session-status-badge.connected { background: #1e2a3a; color: #60a5fa; }
+    .session-status-badge.idle { background: #2a2a2e; color: #888; }
+    .session-status-badge.expired { background: #3a1e1e; color: #f87171; }
+
+    .session-delete-btn {
+      background: none;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 2px;
+      flex-shrink: 0;
+    }
+    .session-delete-btn:hover { color: #f87171; }
+
+    .new-session-btn {
+      width: 100%;
+      padding: 6px;
+      background: #2a2a3e;
+      border: 1px dashed #3b3b5c;
+      border-radius: 6px;
+      color: #a78bfa;
+      cursor: pointer;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .new-session-btn:hover { background: #333355; }
+
+    .no-items { color: #555; font-size: 12px; text-align: center; padding: 12px; }
   </style>
 </head>
 <body>
   <header>
+    <div id="connection-dot"></div>
     <h1>Remote Tool Execution</h1>
-    <div id="worker-status">Workers: loading...</div>
   </header>
 
-  <div id="chat-container"></div>
+  <div class="main-layout">
+    <div class="chat-area">
+      <div id="chat-container"></div>
+      <div id="input-area">
+        <input type="text" id="message-input" placeholder="Ask something... (e.g. 'run uname -a on worker-1')" autocomplete="off" />
+        <button id="send-btn">Send</button>
+      </div>
+    </div>
 
-  <div id="input-area">
-    <input type="text" id="message-input" placeholder="Ask something... (e.g. 'run uname -a on worker-1')" autocomplete="off" />
-    <button id="send-btn">Send</button>
+    <div class="sidebar">
+      <div class="sidebar-panel" style="flex: 0 0 auto;">
+        <div class="sidebar-panel-header">Workers <span id="worker-count">0</span></div>
+        <div class="sidebar-panel-body" id="workers-list"></div>
+      </div>
+      <div class="sidebar-panel" style="flex: 1;">
+        <div class="sidebar-panel-header">Sessions</div>
+        <div class="sidebar-panel-body" id="sessions-list"></div>
+      </div>
+    </div>
   </div>
 
   <script>
-    const sessionId = crypto.randomUUID();
     const chatContainer = document.getElementById('chat-container');
     const messageInput = document.getElementById('message-input');
     const sendBtn = document.getElementById('send-btn');
-    const workerStatus = document.getElementById('worker-status');
+    const connectionDot = document.getElementById('connection-dot');
+    const workersList = document.getElementById('workers-list');
+    const workerCount = document.getElementById('worker-count');
+    const sessionsList = document.getElementById('sessions-list');
+
+    let sessionId = localStorage.getItem('sessionId');
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem('sessionId', sessionId);
+    }
 
     let ws = null;
     let isProcessing = false;
+    const renderedMessageIds = new Set();
+
+    // ── WebSocket ──
 
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(`${protocol}//${location.host}/ws/chat/${sessionId}`);
 
       ws.onopen = () => {
-        addMessage('Connected to control plane', 'status');
+        connectionDot.className = 'connected';
         refreshWorkers();
+        refreshSessions();
       };
 
       ws.onmessage = (event) => {
@@ -193,7 +379,7 @@
       };
 
       ws.onclose = () => {
-        addMessage('Disconnected. Reconnecting...', 'status');
+        connectionDot.className = '';
         setTimeout(connect, 2000);
       };
 
@@ -202,6 +388,16 @@
 
     function handleMessage(data) {
       switch (data.type) {
+        case 'session_status':
+          if (data.is_busy) setProcessing(true);
+          break;
+
+        case 'history_replay':
+          chatContainer.innerHTML = '';
+          renderedMessageIds.clear();
+          renderHistory(data.messages);
+          break;
+
         case 'status':
           addMessage(data.content, 'status');
           break;
@@ -212,11 +408,15 @@
           break;
 
         case 'tool_call_start':
-          addToolCall(data.tool_call_id, data.function_name, data.arguments);
+          addToolCall(data.tool_call_id, data.function_name, data.arguments, data.status || 'pending');
+          break;
+
+        case 'tool_call_update':
+          updateToolCallStatus(data.tool_call_id, data.status, data.worker_name, data.error);
           break;
 
         case 'tool_call_result':
-          updateToolCallResult(data.tool_call_id, data.result);
+          updateToolCallResult(data.tool_call_id, data.result, data.status || 'complete', data.worker_name);
           break;
 
         case 'error':
@@ -226,6 +426,28 @@
       }
     }
 
+    function renderHistory(messages) {
+      for (const m of messages) {
+        if (m.role === 'user') {
+          addMessage(m.content, 'user');
+        } else if (m.role === 'assistant') {
+          if (m.content) addMessage(m.content, 'assistant');
+          if (m.tool_calls) {
+            for (const tc of m.tool_calls) {
+              let args = {};
+              try { args = JSON.parse(tc.function.arguments); } catch {}
+              addToolCall(tc.id, tc.function.name, args, 'complete');
+            }
+          }
+        } else if (m.role === 'tool') {
+          updateToolCallResult(m.tool_call_id, m.content, 'complete', '');
+        }
+      }
+      setProcessing(false);
+    }
+
+    // ── Chat rendering ──
+
     function addMessage(content, type) {
       const div = document.createElement('div');
       div.className = `message ${type}`;
@@ -234,14 +456,18 @@
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
-    function addToolCall(toolCallId, functionName, args) {
+    function addToolCall(toolCallId, functionName, args, status) {
+      if (document.getElementById(`tc-${toolCallId}`)) return;
+
       const div = document.createElement('div');
       div.className = 'message tool-call';
       div.id = `tc-${toolCallId}`;
 
       const header = document.createElement('div');
       header.className = 'tool-call-header';
-      header.textContent = `Tool: ${functionName}`;
+      header.innerHTML = `<span class="status-indicator ${status}" id="tc-status-${toolCallId}"></span>` +
+        `<span class="fn-name">${functionName}</span>` +
+        `<span class="worker-tag" id="tc-worker-${toolCallId}"></span>`;
       div.appendChild(header);
 
       const argsDiv = document.createElement('div');
@@ -250,15 +476,37 @@
 
       const resultDiv = document.createElement('div');
       resultDiv.className = 'tool-call-result';
-      resultDiv.textContent = 'Executing...';
       resultDiv.id = `tc-result-${toolCallId}`;
+      if (status === 'pending' || status === 'running') {
+        resultDiv.textContent = status === 'pending' ? 'Dispatching...' : 'Executing...';
+      }
       div.appendChild(resultDiv);
 
       chatContainer.appendChild(div);
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
-    function updateToolCallResult(toolCallId, result) {
+    function updateToolCallStatus(toolCallId, status, workerName, error) {
+      const indicator = document.getElementById(`tc-status-${toolCallId}`);
+      if (indicator) indicator.className = `status-indicator ${status}`;
+
+      const workerTag = document.getElementById(`tc-worker-${toolCallId}`);
+      if (workerTag && workerName) workerTag.textContent = `on ${workerName}`;
+
+      const resultDiv = document.getElementById(`tc-result-${toolCallId}`);
+      if (resultDiv) {
+        if (status === 'running') resultDiv.textContent = `Executing on ${workerName}...`;
+        else if (status === 'retrying') resultDiv.textContent = `${error || 'Retrying'}... reassigning to another worker`;
+      }
+    }
+
+    function updateToolCallResult(toolCallId, result, status, workerName) {
+      const indicator = document.getElementById(`tc-status-${toolCallId}`);
+      if (indicator) indicator.className = `status-indicator ${status}`;
+
+      const workerTag = document.getElementById(`tc-worker-${toolCallId}`);
+      if (workerTag && workerName) workerTag.textContent = `on ${workerName}`;
+
       const resultDiv = document.getElementById(`tc-result-${toolCallId}`);
       if (resultDiv) {
         try {
@@ -285,37 +533,98 @@
     function sendMessage() {
       const content = messageInput.value.trim();
       if (!content || isProcessing || !ws || ws.readyState !== WebSocket.OPEN) return;
-
       addMessage(content, 'user');
       ws.send(JSON.stringify({ type: 'user_message', content }));
       messageInput.value = '';
       setProcessing(true);
     }
 
+    // ── Sidebar: Workers ──
+
     async function refreshWorkers() {
       try {
         const res = await fetch('/api/workers');
         const data = await res.json();
+        workerCount.textContent = data.workers.length;
         if (data.workers.length === 0) {
-          workerStatus.innerHTML = 'Workers: <span style="color:#f87171">none connected</span>';
+          workersList.innerHTML = '<div class="no-items">No workers connected</div>';
         } else {
-          workerStatus.innerHTML = 'Workers: ' +
-            data.workers.map(w => `<span class="worker-badge">${w}</span>`).join('');
+          workersList.innerHTML = data.workers.map(w => `
+            <div class="worker-card">
+              <span class="worker-dot ${w.busy ? 'busy' : ''}"></span>
+              <span class="name">${w.name}</span>
+            </div>
+          `).join('');
         }
       } catch {
-        workerStatus.textContent = 'Workers: unknown';
+        workersList.innerHTML = '<div class="no-items">Error loading</div>';
       }
     }
 
+    // ── Sidebar: Sessions ──
+
+    async function refreshSessions() {
+      try {
+        const res = await fetch('/api/sessions');
+        const data = await res.json();
+        let html = '<button class="new-session-btn" onclick="newSession()">+ New Session</button>';
+        if (data.sessions.length === 0) {
+          html += '<div class="no-items">No sessions yet</div>';
+        } else {
+          for (const s of data.sessions) {
+            const isActive = s.id === sessionId;
+            const shortId = s.id.slice(0, 8);
+            html += `
+              <div class="session-card ${isActive ? 'active' : ''}" onclick="switchSession('${s.id}')">
+                <span class="session-id">${shortId}</span>
+                <span class="session-status-badge ${s.status}">${s.status}</span>
+                <button class="session-delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete">&times;</button>
+              </div>`;
+          }
+        }
+        sessionsList.innerHTML = html;
+      } catch {
+        sessionsList.innerHTML = '<div class="no-items">Error loading</div>';
+      }
+    }
+
+    function newSession() {
+      sessionId = crypto.randomUUID();
+      localStorage.setItem('sessionId', sessionId);
+      chatContainer.innerHTML = '';
+      renderedMessageIds.clear();
+      if (ws) ws.close();
+      connect();
+      refreshSessions();
+    }
+
+    function switchSession(id) {
+      if (id === sessionId) return;
+      sessionId = id;
+      localStorage.setItem('sessionId', id);
+      chatContainer.innerHTML = '';
+      renderedMessageIds.clear();
+      setProcessing(false);
+      if (ws) ws.close();
+      connect();
+      refreshSessions();
+    }
+
+    async function deleteSession(id) {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+      if (id === sessionId) newSession();
+      else refreshSessions();
+    }
+
+    // ── Init ──
+
     sendBtn.addEventListener('click', sendMessage);
     messageInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
 
     setInterval(refreshWorkers, 5000);
+    setInterval(refreshSessions, 5000);
 
     connect();
   </script>
