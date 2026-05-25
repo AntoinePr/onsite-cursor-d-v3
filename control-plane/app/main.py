@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from openai import AsyncOpenAI
@@ -20,7 +21,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("control-plane")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+USAGE_API_URL = os.getenv("USAGE_API_URL", "http://localhost:8001")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+usage_http_client = httpx.AsyncClient(timeout=5.0)
 
 TOOLS_SCHEMA = [
     {
@@ -541,6 +544,8 @@ app = FastAPI(title="Remote Tool Execution Control Plane", lifespan=lifespan)
 
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/sessions", response_class=HTMLResponse)
+@app.get("/usage-and-cost", response_class=HTMLResponse)
 async def serve_ui():
     ui_path = Path(__file__).parent / "ui" / "index.html"
     return HTMLResponse(ui_path.read_text())
@@ -914,6 +919,24 @@ async def handle_user_message(state: SessionState, content: str):
         await state.send_to_browser({"type": "error", "content": str(e)})
 
 
+async def _emit_usage(session_id: str, usage):
+    """Fire-and-forget usage event to the Usage API."""
+    try:
+        payload = {
+            "event_type": "llm_call",
+            "org_id": 1,
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "session_id": session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "usage": usage.model_dump() if hasattr(usage, "model_dump") else dict(usage),
+        }
+        await usage_http_client.post(f"{USAGE_API_URL}/usage", json=payload)
+        logger.info(f"Usage event sent for session {session_id[:8]}")
+    except Exception as e:
+        logger.warning(f"Failed to send usage event: {e}")
+
+
 async def run_llm_loop(state: SessionState, messages: list[dict]):
     sid = uuid.UUID(state.session_id)
     max_retries = 2
@@ -926,6 +949,7 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
                 tools=TOOLS_SCHEMA,
                 tool_choice="auto",
                 stream=True,
+                stream_options={"include_usage": True},
             )
         except Exception as e:
             logger.error(f"LLM error: {e}")
@@ -935,8 +959,12 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
         content_parts: list[str] = []
         tool_call_chunks: dict[int, dict] = {}
         finish_reason = None
+        stream_usage = None
 
         async for chunk in stream:
+            if chunk.usage:
+                stream_usage = chunk.usage
+
             delta = chunk.choices[0].delta if chunk.choices else None
             if not delta:
                 continue
@@ -968,6 +996,9 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
                             entry["function"]["name"] += tc_delta.function.name
                         if tc_delta.function.arguments:
                             entry["function"]["arguments"] += tc_delta.function.arguments
+
+        if stream_usage:
+            asyncio.create_task(_emit_usage(str(sid), stream_usage))
 
         full_content = "".join(content_parts) or None
         tool_calls_data = None

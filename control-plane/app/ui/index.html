@@ -389,6 +389,128 @@
       color: #555;
       font-size: 14px;
     }
+
+    .sidebar-nav-tab {
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #888;
+      background: #1a1a2e;
+      cursor: pointer;
+      border-bottom: 1px solid #2a2a3e;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .sidebar-nav-tab:hover { background: #222240; color: #a78bfa; }
+    .sidebar-nav-tab.active { color: #a78bfa; background: #1a1a30; border-left: 2px solid #a78bfa; }
+
+    .cost-dashboard {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      order: 2;
+      background: #0f0f0f;
+    }
+
+    .cost-dashboard-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid #2a2a3e;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .cost-dashboard-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+
+
+    .cost-summary-row {
+      display: flex;
+      gap: 24px;
+      padding: 16px 24px;
+    }
+
+    .cost-summary-card {
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      padding: 14px 20px;
+      min-width: 160px;
+    }
+
+    .cost-summary-card .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    .cost-summary-card .value {
+      font-size: 22px;
+      font-weight: 600;
+      font-family: 'SF Mono', Menlo, monospace;
+    }
+
+    .cost-summary-card .value.cost-color { color: #a78bfa; }
+    .cost-summary-card .value.token-color { color: #4ade80; }
+
+    .chart-container {
+      flex: 1;
+      padding: 16px 24px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .chart-container h3 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 12px;
+    }
+
+    .chart-legend {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      color: #888;
+    }
+
+    .chart-legend .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    .chart-wrapper {
+      flex: 1;
+      min-height: 200px;
+      position: relative;
+    }
+
+    .chart-wrapper canvas {
+      width: 100% !important;
+      height: 100% !important;
+    }
   </style>
 </head>
 <body>
@@ -424,17 +546,49 @@
     </div>
 
     <div class="sidebar">
-      <div class="sidebar-panel" style="flex: 0 0 auto;">
-        <div class="sidebar-panel-header">Workers <span id="worker-count">0</span></div>
-        <div class="sidebar-panel-body" id="workers-list"></div>
+      <div style="display: flex; flex-shrink: 0;">
+        <div class="sidebar-nav-tab active" id="sessions-tab" onclick="showSessionsView()" style="flex: 1; justify-content: center;">Sessions</div>
+        <div class="sidebar-nav-tab" id="cost-tab" onclick="showCostDashboard()" style="flex: 1; justify-content: center;">Usage & Cost</div>
       </div>
-      <div class="sidebar-panel" style="flex: 0 0 auto;">
-        <div class="sidebar-panel-header">Sessions</div>
-        <div class="sidebar-panel-body" id="sessions-list"></div>
+      <div id="sessions-panels">
+        <div class="sidebar-panel" style="flex: 0 0 auto;">
+          <div class="sidebar-panel-header">Workers <span id="worker-count">0</span></div>
+          <div class="sidebar-panel-body" id="workers-list"></div>
+        </div>
+        <div class="sidebar-panel" style="flex: 0 0 auto;">
+          <div class="sidebar-panel-header">Active Sessions</div>
+          <div class="sidebar-panel-body" id="sessions-list"></div>
+        </div>
+        <div class="sidebar-panel" style="flex: 1;">
+          <div class="sidebar-panel-header">Past Sessions</div>
+          <div class="sidebar-panel-body" id="past-sessions-list"></div>
+        </div>
       </div>
-      <div class="sidebar-panel" style="flex: 1;">
-        <div class="sidebar-panel-header">Past Sessions</div>
-        <div class="sidebar-panel-body" id="past-sessions-list"></div>
+    </div>
+
+    <div class="cost-dashboard" id="cost-dashboard" style="display: none;">
+      <div class="cost-dashboard-header">
+        <h2>Usage & Cost</h2>
+      </div>
+      <div class="cost-summary-row">
+        <div class="cost-summary-card">
+          <div class="label">Total Cost</div>
+          <div class="value cost-color" id="dash-total-cost">$0.000000</div>
+        </div>
+        <div class="cost-summary-card">
+          <div class="label">Total Tokens</div>
+          <div class="value token-color" id="dash-total-tokens">0</div>
+        </div>
+      </div>
+      <div class="chart-container">
+        <h3>Cost per minute (last 15 min)</h3>
+        <div class="chart-legend">
+          <div class="legend-item"><span class="legend-swatch" style="background: #6d28d9;"></span> Cost / min</div>
+          <div class="legend-item"><span class="legend-swatch" style="background: #4ade80;"></span> Cumulative</div>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="cost-chart"></canvas>
+        </div>
       </div>
     </div>
   </div>
@@ -449,11 +603,24 @@
     const sessionsList = document.getElementById('sessions-list');
     const pastSessionsList = document.getElementById('past-sessions-list');
 
+    const dashTotalCost = document.getElementById('dash-total-cost');
+    const dashTotalTokens = document.getElementById('dash-total-tokens');
+    const costTab = document.getElementById('cost-tab');
+    const sessionsTab = document.getElementById('sessions-tab');
+    const sessionsPanels = document.getElementById('sessions-panels');
+    const costDashboard = document.getElementById('cost-dashboard');
+    const chatArea = document.querySelector('.chat-area');
+    const costCanvas = document.getElementById('cost-chart');
+
+    let costHistory = [];
+    let costDashboardVisible = false;
+
     let workersAvailable = 0;
 
     let sessionId = localStorage.getItem('sessionId');
 
     let ws = null;
+    let costWs = null;
     let isProcessing = false;
     const renderedMessageIds = new Set();
 
@@ -467,6 +634,7 @@
         connectionDot.className = 'connected';
         refreshWorkers();
         refreshSessions();
+        connectCostWs();
       };
 
       ws.onmessage = (event) => {
@@ -481,6 +649,177 @@
 
       ws.onerror = () => {};
     }
+
+    function connectCostWs() {
+      if (costWs) { costWs.onclose = null; costWs.close(); costWs = null; }
+      if (!sessionId) return;
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      costWs = new WebSocket(`${protocol}//${location.hostname}:8002/ws/costs/${sessionId}`);
+      costWs.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'cost_update') {
+          if (data.cumulative) {
+            dashTotalCost.textContent = '$' + data.cumulative.total_cost.toFixed(6);
+            dashTotalTokens.textContent = data.cumulative.total_tokens.toLocaleString();
+          }
+          if (data.history) {
+            costHistory = data.history;
+            if (costDashboardVisible) renderCostChart();
+          }
+        }
+      };
+      costWs.onclose = () => { costWs = null; };
+      costWs.onerror = () => {};
+    }
+
+    function resetCostPanel() {
+      dashTotalCost.textContent = '$0.000000';
+      dashTotalTokens.textContent = '0';
+      costHistory = [];
+      if (costDashboardVisible) renderCostChart();
+    }
+
+    function showCostDashboard(pushState = true) {
+      costDashboardVisible = true;
+      chatArea.style.display = 'none';
+      costDashboard.style.display = 'flex';
+      sessionsPanels.style.display = 'none';
+      costTab.classList.add('active');
+      sessionsTab.classList.remove('active');
+      if (pushState) history.pushState({ view: 'cost' }, '', '/usage-and-cost');
+      renderCostChart();
+      if (!costWs) connectCostWs();
+    }
+
+    function showSessionsView(pushState = true) {
+      costDashboardVisible = false;
+      costDashboard.style.display = 'none';
+      chatArea.style.display = 'flex';
+      sessionsPanels.style.display = '';
+      costTab.classList.remove('active');
+      sessionsTab.classList.add('active');
+      if (pushState) history.pushState({ view: 'sessions' }, '', '/sessions');
+    }
+
+    window.addEventListener('popstate', (e) => {
+      if (e.state && e.state.view === 'cost') {
+        showCostDashboard(false);
+      } else {
+        showSessionsView(false);
+      }
+    });
+
+    function renderCostChart() {
+      const canvas = costCanvas;
+      const wrapper = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const w = wrapper.clientWidth;
+      const h = wrapper.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, w, h);
+
+      const data = costHistory.length ? costHistory : [];
+      const n = data.length || 15;
+
+      const pad = { top: 20, right: 60, bottom: 40, left: 12 };
+      const chartW = w - pad.left - pad.right;
+      const chartH = h - pad.top - pad.bottom;
+
+      if (chartW <= 0 || chartH <= 0) return;
+
+      const maxBarCost = Math.max(...data.map(d => d.cost), 0.000001);
+      const maxCumCost = Math.max(...data.map(d => d.cumulative), 0.000001);
+
+      const barWidth = Math.max(Math.floor(chartW / n) - 4, 2);
+      const gap = (chartW - barWidth * n) / (n + 1);
+
+      ctx.strokeStyle = '#2a2a3e';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (chartH / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(w - pad.right, y);
+        ctx.stroke();
+      }
+
+      for (let i = 0; i < n; i++) {
+        const d = data[i] || { cost: 0, cumulative: 0, minute: '' };
+        const x = pad.left + gap + i * (barWidth + gap);
+        const barH = (d.cost / maxBarCost) * chartH;
+        const y = pad.top + chartH - barH;
+
+        ctx.fillStyle = '#6d28d9';
+        ctx.beginPath();
+        const radius = Math.min(3, barWidth / 2);
+        ctx.moveTo(x, y + radius);
+        ctx.arcTo(x, y, x + radius, y, radius);
+        ctx.arcTo(x + barWidth, y, x + barWidth, y + radius, radius);
+        ctx.lineTo(x + barWidth, pad.top + chartH);
+        ctx.lineTo(x, pad.top + chartH);
+        ctx.closePath();
+        ctx.fill();
+
+        if (i % 3 === 0 && d.minute) {
+          ctx.fillStyle = '#555';
+          ctx.font = '10px -apple-system, sans-serif';
+          ctx.textAlign = 'center';
+          const label = d.minute.slice(11, 16);
+          ctx.fillText(label, x + barWidth / 2, pad.top + chartH + 16);
+        }
+      }
+
+      ctx.fillStyle = '#555';
+      ctx.font = '10px SF Mono, Menlo, monospace';
+      ctx.textAlign = 'right';
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (chartH / 4) * i;
+        const val = maxBarCost * (1 - i / 4);
+        ctx.fillText(formatCost(val), w - pad.right + 50, y + 3);
+      }
+
+      if (data.length > 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = '#4ade80';
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
+        for (let i = 0; i < data.length; i++) {
+          const d = data[i];
+          const x = pad.left + gap + i * (barWidth + gap) + barWidth / 2;
+          const y = pad.top + chartH - (d.cumulative / maxCumCost) * chartH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        for (let i = 0; i < data.length; i++) {
+          const d = data[i];
+          const x = pad.left + gap + i * (barWidth + gap) + barWidth / 2;
+          const y = pad.top + chartH - (d.cumulative / maxCumCost) * chartH;
+          ctx.beginPath();
+          ctx.arc(x, y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = '#4ade80';
+          ctx.fill();
+        }
+      }
+    }
+
+    function formatCost(v) {
+      if (v === 0) return '$0';
+      if (v < 0.001) return '$' + v.toFixed(6);
+      if (v < 1) return '$' + v.toFixed(4);
+      return '$' + v.toFixed(2);
+    }
+
+    window.addEventListener('resize', () => {
+      if (costDashboardVisible) renderCostChart();
+    });
 
     function handleMessage(data) {
       if (data.message_id) {
@@ -829,6 +1168,7 @@
       messageInput.disabled = false;
       sendBtn.disabled = false;
       messageInput.placeholder = "Ask something... (e.g. 'run uname -a on worker-1')";
+      resetCostPanel();
       if (ws) ws.close();
       connect();
       refreshSessions();
@@ -837,17 +1177,20 @@
     let viewingPastSession = false;
 
     function switchSession(id, status) {
-      if (id === sessionId) return;
+      if (id === sessionId && !costDashboardVisible) return;
+      if (costDashboardVisible) showSessionsView();
       sessionId = id;
       localStorage.setItem('sessionId', id);
       chatContainer.innerHTML = '';
       renderedMessageIds.clear();
       hideEmptyState();
+      resetCostPanel();
 
       if (status && status !== 'active' && status !== 'failed') {
         viewingPastSession = true;
         if (ws) { ws.onclose = null; ws.close(); ws = null; }
         viewPastSession(id);
+        connectCostWs();
       } else {
         viewingPastSession = false;
         if (ws) ws.close();
@@ -919,6 +1262,12 @@
       connect();
     } else {
       showEmptyState();
+    }
+
+    if (location.pathname === '/usage-and-cost') {
+      showCostDashboard(false);
+    } else {
+      history.replaceState({ view: 'sessions' }, '', location.pathname === '/sessions' ? '/sessions' : location.pathname);
     }
   </script>
 </body>
