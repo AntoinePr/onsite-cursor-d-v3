@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from openai import AsyncOpenAI
 from datetime import timedelta
 from sqlalchemy import select, delete, and_
@@ -121,16 +121,19 @@ class WorkerPool:
         self._pending_worker: dict[str, str] = {}  # tool_call_id -> worker_name
         self._worker_session: dict[str, str] = {}   # worker_name -> session_id
         self._session_worker: dict[str, str] = {}   # session_id -> worker_name
+        self._last_heartbeat: dict[str, datetime] = {}
         self._round_robin_idx = 0
 
     def register(self, name: str, ws: WebSocket, caps: list[str] | None = None):
         self.workers[name] = ws
         self.capabilities[name] = caps or []
+        self._last_heartbeat[name] = datetime.now(timezone.utc)
         logger.info(f"Worker registered: {name} caps={caps} (total: {len(self.workers)})")
 
     def unregister(self, name: str):
         self.workers.pop(name, None)
         self.capabilities.pop(name, None)
+        self._last_heartbeat.pop(name, None)
         sid = self._worker_session.pop(name, None)
         if sid:
             self._session_worker.pop(sid, None)
@@ -389,10 +392,12 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized")
     reaper = asyncio.create_task(_session_reaper())
     dispatch_reaper = asyncio.create_task(_dispatch_reaper())
+    health_checker = asyncio.create_task(_worker_health_checker())
     yield
     logger.info("Shutting down gracefully...")
     reaper.cancel()
     dispatch_reaper.cancel()
+    health_checker.cancel()
     for state in session_manager.all_sessions():
         if state.active_llm_task and not state.active_llm_task.done():
             state.active_llm_task.cancel()
@@ -427,6 +432,42 @@ async def _session_reaper():
                 if sess:
                     sess.status = "expired"
                     await db.commit()
+
+
+HEARTBEAT_TIMEOUT = timedelta(seconds=45)
+
+
+async def _worker_health_checker():
+    while True:
+        await asyncio.sleep(10)
+        now = datetime.now(timezone.utc)
+        stale = [
+            (name, ws)
+            for name, ws in list(worker_pool.workers.items())
+            if now - worker_pool._last_heartbeat.get(name, now) > HEARTBEAT_TIMEOUT
+        ]
+        for name, ws in stale:
+            logger.warning(f"Worker {name} missed heartbeats, forcing disconnect")
+            sid = worker_pool._worker_session.get(name)
+            if sid:
+                state = session_manager.get(sid)
+                if state:
+                    await state.send_to_browser({
+                        "type": "worker_failure",
+                        "worker_name": name,
+                        "reason": "Worker heartbeat timeout",
+                    })
+                async with async_session() as db:
+                    db.add(Message(
+                        session_id=uuid.UUID(sid),
+                        role="system",
+                        content=json.dumps({"type": "worker_failure", "worker_name": name, "reason": "Worker heartbeat timeout"}),
+                    ))
+                    await db.commit()
+            try:
+                await ws.close(code=4002, reason="Heartbeat timeout")
+            except Exception:
+                pass
 
 
 ACK_TIMEOUT = timedelta(seconds=5)
@@ -496,9 +537,13 @@ async def api_list_sessions():
         for s in sessions:
             sid = str(s.id)
             has_worker = worker_pool.get_worker_for_session(sid) is not None
+            status = s.status
+            if s.status == "active" and not has_worker and session_manager.get(sid) is not None:
+                status = "failed"
             out.append({
                 "id": sid,
-                "status": s.status,
+                "name": s.name,
+                "status": status,
                 "has_worker": has_worker,
                 "created_at": s.created_at.isoformat(),
                 "last_active_at": s.last_active_at.isoformat() if s.last_active_at else None,
@@ -524,6 +569,33 @@ async def api_delete_session(session_id: str):
             sess.status = "past"
             await db.commit()
     return {"killed": session_id}
+
+
+@app.post("/api/sessions/{session_id}/reconnect")
+async def api_reconnect_session(session_id: str):
+    worker_name = worker_pool.bind_available_worker(session_id)
+    if not worker_name:
+        return JSONResponse(status_code=409, content={"error": "No workers available"})
+    sid = uuid.UUID(session_id)
+    async with async_session() as db:
+        sess = await db.get(Session, sid)
+        if sess:
+            sess.status = "active"
+            await db.commit()
+    async with async_session() as db:
+        db.add(Message(
+            session_id=sid,
+            role="system",
+            content=json.dumps({"type": "worker_reconnected", "worker_name": worker_name}),
+        ))
+        await db.commit()
+    state = session_manager.get(session_id)
+    if state:
+        await state.send_to_browser({
+            "type": "worker_reconnected",
+            "worker_name": worker_name,
+        })
+    return {"ok": True, "worker_name": worker_name}
 
 
 @app.get("/api/sessions/{session_id}/messages")
@@ -723,12 +795,44 @@ async def ws_chat(websocket: WebSocket, session_id: str):
 # ── LLM Loop (decoupled from WebSocket) ─────────────────────────────────────
 
 
+async def _generate_session_name(state: SessionState, first_message: str):
+    """Call the LLM to generate a 1-2 word session name from the first user message."""
+    sid = uuid.UUID(state.session_id)
+    try:
+        resp = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Summarize this user request in 1-2 words as a short session title. Reply with ONLY the title, nothing else."},
+                {"role": "user", "content": first_message},
+            ],
+            max_tokens=10,
+        )
+        name = resp.choices[0].message.content.strip()[:50]
+        async with async_session() as db:
+            sess = await db.get(Session, sid)
+            if sess:
+                sess.name = name
+                await db.commit()
+        await state.send_to_browser({"type": "session_name_update", "session_id": state.session_id, "name": name})
+        logger.info(f"Session {state.session_id[:8]} named: {name}")
+    except Exception as e:
+        logger.warning(f"Failed to generate session name: {e}")
+
+
 async def handle_user_message(state: SessionState, content: str):
     sid = uuid.UUID(state.session_id)
     try:
+        is_first_message = False
         async with async_session() as db:
+            count = await db.execute(
+                select(Message).where(Message.session_id == sid).limit(1)
+            )
+            is_first_message = count.scalar_one_or_none() is None
             db.add(Message(session_id=sid, role="user", content=content))
             await db.commit()
+
+        if is_first_message:
+            asyncio.create_task(_generate_session_name(state, content))
 
         await state.send_to_browser({"type": "status", "content": "Thinking..."})
 
@@ -740,6 +844,8 @@ async def handle_user_message(state: SessionState, content: str):
 
         messages = []
         for m in history:
+            if m.role == "system":
+                continue
             msg: dict = {"role": m.role}
             if m.role == "tool":
                 msg["content"] = m.content or ""
@@ -977,6 +1083,7 @@ async def ws_worker(websocket: WebSocket):
                             dispatch.acked_at = datetime.now(timezone.utc)
                             await db.commit()
             elif data.get("type") == "heartbeat":
+                worker_pool._last_heartbeat[worker_name] = datetime.now(timezone.utc)
                 await websocket.send_json({"type": "heartbeat_ack"})
 
     except WebSocketDisconnect:
@@ -985,4 +1092,20 @@ async def ws_worker(websocket: WebSocket):
         logger.warning("Worker failed to register in time")
     finally:
         if worker_name:
+            sid = worker_pool._worker_session.get(worker_name)
+            if sid:
+                state = session_manager.get(sid)
+                if state:
+                    await state.send_to_browser({
+                        "type": "worker_failure",
+                        "worker_name": worker_name,
+                        "reason": "Worker disconnected",
+                    })
+                async with async_session() as db:
+                    db.add(Message(
+                        session_id=uuid.UUID(sid),
+                        role="system",
+                        content=json.dumps({"type": "worker_failure", "worker_name": worker_name, "reason": "Worker disconnected"}),
+                    ))
+                    await db.commit()
             worker_pool.unregister(worker_name)

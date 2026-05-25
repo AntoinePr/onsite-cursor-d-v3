@@ -26,9 +26,9 @@ clean:
 	docker compose down -v --rmi local
 
 chaos-kill-worker:
-	@WORKER=$$(docker compose ps --format '{{.Name}}' | grep worker | shuf -n 1); \
-	echo "Killing $$WORKER..."; \
-	docker kill $$WORKER
+	@SERVICE=$$(docker compose ps --services | grep worker | shuf -n 1); \
+	echo "Restarting $$SERVICE..."; \
+	docker compose restart $$SERVICE
 
 chaos-duplicate:
 	@echo "Fetching most recent dispatch..."; \

@@ -93,6 +93,45 @@
       50% { opacity: 0; }
     }
 
+    .message.worker-failure {
+      align-self: stretch;
+      max-width: 100%;
+      background: #3a1e1e;
+      border: 1px solid #f87171;
+      color: #f87171;
+      font-size: 12px;
+      text-align: center;
+      padding: 6px;
+      border-radius: 6px;
+    }
+
+    .message.worker-reconnected {
+      align-self: stretch;
+      max-width: 100%;
+      background: #1e3a2f;
+      border: 1px solid #4ade80;
+      color: #4ade80;
+      font-size: 12px;
+      text-align: center;
+      padding: 6px;
+      border-radius: 6px;
+    }
+
+    .reconnect-btn {
+      align-self: center;
+      background: #2a2a3e;
+      border: 1px solid #a78bfa;
+      color: #a78bfa;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      margin: 4px auto;
+      display: block;
+    }
+    .reconnect-btn:hover { background: #1a1a30; }
+    .reconnect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
     .message.status {
       align-self: center;
       background: transparent;
@@ -255,6 +294,7 @@
       background: #4ade80;
       flex-shrink: 0;
     }
+    .session-dot.failed { background: #f87171; }
 
     .worker-card .name { font-size: 13px; font-weight: 500; }
 
@@ -308,6 +348,7 @@
       flex-shrink: 0;
     }
     .session-status-badge.active { background: #1e3a2f; color: #4ade80; }
+    .session-status-badge.failed { background: #3a1e1e; color: #f87171; }
     .session-status-badge.past { background: #2a2a2e; color: #888; }
     .session-status-badge.expired { background: #3a1e1e; color: #f87171; }
 
@@ -491,6 +532,24 @@
           updateToolCallResult(data.tool_call_id, data.result, data.status || 'complete', data.worker_name);
           break;
 
+        case 'worker_failure':
+          addMessage(`Worker failure: ${data.worker_name} disconnected`, 'worker-failure');
+          addReconnectButton();
+          setProcessing(false);
+          refreshWorkers();
+          refreshSessions();
+          break;
+
+        case 'worker_reconnected':
+          addMessage('Reconnected to new sandbox', 'worker-reconnected');
+          refreshWorkers();
+          refreshSessions();
+          break;
+
+        case 'session_name_update':
+          refreshSessions();
+          break;
+
         case 'error':
           addMessage(`Error: ${data.content}`, 'status');
           setProcessing(false);
@@ -513,6 +572,20 @@
           }
         } else if (m.role === 'tool') {
           updateToolCallResult(m.tool_call_id, m.content, 'complete', '');
+        } else if (m.role === 'system') {
+          try {
+            const ev = JSON.parse(m.content);
+            if (ev.type === 'worker_failure') {
+              addMessage(`Worker failure: ${ev.worker_name} disconnected`, 'worker-failure');
+              if (!viewingPastSession) {
+                addReconnectButton();
+              }
+            } else if (ev.type === 'worker_reconnected') {
+              addMessage('Reconnected to new sandbox', 'worker-reconnected');
+              const existingBtn = chatContainer.querySelector('.reconnect-btn');
+              if (existingBtn) existingBtn.remove();
+            }
+          } catch {}
         }
       }
       setProcessing(false);
@@ -526,6 +599,33 @@
       div.textContent = content;
       chatContainer.appendChild(div);
       chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function addReconnectButton() {
+      const existing = chatContainer.querySelector('.reconnect-btn');
+      if (existing) existing.remove();
+      const btn = document.createElement('button');
+      btn.className = 'reconnect-btn';
+      btn.textContent = 'Reconnect to new sandbox';
+      btn.onclick = () => reconnectSession(btn);
+      chatContainer.appendChild(btn);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    async function reconnectSession(btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'Reconnecting...'; }
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/reconnect`, { method: 'POST' });
+        if (res.ok) {
+          if (btn) btn.remove();
+        } else {
+          addMessage('No available workers to reconnect', 'status');
+          if (btn) { btn.disabled = false; btn.textContent = 'Reconnect to new sandbox'; }
+        }
+      } catch {
+        addMessage('Reconnect failed', 'status');
+        if (btn) { btn.disabled = false; btn.textContent = 'Reconnect to new sandbox'; }
+      }
     }
 
     function addToolCall(toolCallId, functionName, args, status) {
@@ -674,8 +774,8 @@
         const res = await fetch('/api/sessions');
         const data = await res.json();
 
-        const activeSessions = data.sessions.filter(s => s.status === 'active');
-        const pastSessions = data.sessions.filter(s => s.status !== 'active');
+        const activeSessions = data.sessions.filter(s => s.status === 'active' || s.status === 'failed');
+        const pastSessions = data.sessions.filter(s => s.status !== 'active' && s.status !== 'failed');
 
         const canCreate = workersAvailable > 0;
         let activeHtml = canCreate
@@ -704,16 +804,17 @@
     }
 
     function renderSessionCard(s, isCurrent) {
-      const shortId = s.id.slice(0, 8);
-      const isActive = s.status === 'active';
-      const dot = isActive ? '<span class="session-dot"></span>' : '';
+      const displayName = s.name || s.id.slice(0, 8);
+      const isActive = s.status === 'active' || s.status === 'failed';
+      const dotClass = s.status === 'failed' ? 'session-dot failed' : 'session-dot';
+      const dot = isActive ? `<span class="${dotClass}"></span>` : '';
       const killBtn = isActive
         ? `<button class="session-kill-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Kill session">Kill</button>`
         : '';
       return `
         <div class="session-card ${isCurrent ? 'active' : ''}" onclick="switchSession('${s.id}', '${s.status}')">
           ${dot}
-          <span class="session-id">${shortId}</span>
+          <span class="session-id">${displayName}</span>
           ${killBtn}
         </div>`;
     }
@@ -747,7 +848,7 @@
       renderedMessageIds.clear();
       hideEmptyState();
 
-      if (status && status !== 'active') {
+      if (status && status !== 'active' && status !== 'failed') {
         viewingPastSession = true;
         if (ws) { ws.onclose = null; ws.close(); ws = null; }
         viewPastSession(id);
