@@ -326,6 +326,7 @@ worker_pool = WorkerPool()
 class SessionState:
     def __init__(self, session_id: str):
         self.session_id = session_id
+        self.session_name: str = "New session"
         self.browser_ws: WebSocket | None = None
         self.outbound_queue: asyncio.Queue = asyncio.Queue()
         self.delivery_task: asyncio.Task | None = None
@@ -771,6 +772,10 @@ async def ws_chat(websocket: WebSocket, session_id: str):
                     logger.info(f"Restored binding on browser reconnect: {existing.bound_worker} -> session {session_id[:8]}")
 
     state = session_manager.get_or_create(session_id)
+    async with async_session() as db:
+        sess_row = await db.get(Session, sid)
+        if sess_row and sess_row.name:
+            state.session_name = sess_row.name
     state.attach_browser(websocket)
     is_reconnect = False
 
@@ -851,6 +856,7 @@ async def _generate_session_name(state: SessionState, first_message: str):
             max_tokens=10,
         )
         name = resp.choices[0].message.content.strip()[:50]
+        state.session_name = name
         async with async_session() as db:
             sess = await db.get(Session, sid)
             if sess:
@@ -875,7 +881,7 @@ async def handle_user_message(state: SessionState, content: str):
             await db.commit()
 
         if is_first_message:
-            asyncio.create_task(_generate_session_name(state, content))
+            await _generate_session_name(state, content)
 
         await state.send_to_browser({"type": "status", "content": "Thinking..."})
 
@@ -966,7 +972,7 @@ async def _usage_flush_loop():
             usage_buffer.requeue(batch)
 
 
-def _emit_usage(session_id: str, usage, call_id: str):
+def _emit_usage(session_id: str, usage, call_id: str, session_name: str = "New session"):
     payload = {
         "call_id": call_id,
         "event_type": "llm_call",
@@ -974,6 +980,7 @@ def _emit_usage(session_id: str, usage, call_id: str):
         "provider": "openai",
         "model": "gpt-4o-mini",
         "session_id": session_id,
+        "session_name": session_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "usage": usage.model_dump() if hasattr(usage, "model_dump") else dict(usage),
     }
@@ -1046,7 +1053,7 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
                             entry["function"]["arguments"] += tc_delta.function.arguments
 
         if stream_usage:
-            _emit_usage(str(sid), stream_usage, call_id=chunk_call_id or str(uuid.uuid4()))
+            _emit_usage(str(sid), stream_usage, call_id=chunk_call_id or str(uuid.uuid4()), session_name=state.session_name)
 
         full_content = "".join(content_parts) or None
         tool_calls_data = None

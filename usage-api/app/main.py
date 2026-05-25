@@ -26,6 +26,7 @@ class UsageEvent(BaseModel):
     provider: str
     model: str
     session_id: str
+    session_name: str | None = None
     timestamp: str
     usage: dict[str, Any]
 

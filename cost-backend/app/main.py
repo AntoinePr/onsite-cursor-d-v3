@@ -81,6 +81,7 @@ async def process_usage_event(event: dict):
     event_id = event.get("call_id") or str(uuid.uuid4())
     org_id = event.get("org_id", 1)
     session_id = event["session_id"]
+    session_name = event.get("session_name")
     provider = event["provider"]
     model = event["model"]
     event_type = event["event_type"]
@@ -106,6 +107,7 @@ async def process_usage_event(event: dict):
                     event_id=event_id,
                     org_id=org_id,
                     session_id=session_id,
+                    session_name=session_name,
                     provider=provider,
                     model=model,
                     event_type=event_type,
@@ -146,6 +148,7 @@ async def process_usage_event(event: dict):
                     event_id=event_id,
                     org_id=org_id,
                     session_id=session_id,
+                    session_name=session_name,
                     provider=provider,
                     model=model,
                     event_type=event_type,
@@ -198,8 +201,12 @@ async def get_history(
     extra_select = ""
     extra_group = ""
     if group_by and group_by in ALLOWED_GROUP_BY:
-        extra_select = f", u.{group_by} AS group_val"
-        extra_group = f", u.{group_by}"
+        if group_by == "session_id":
+            extra_select = ", COALESCE(u.session_name, LEFT(u.session_id::text, 8)) AS group_val"
+            extra_group = ", u.session_id, u.session_name"
+        else:
+            extra_select = f", u.{group_by} AS group_val"
+            extra_group = f", u.{group_by}"
 
     session_filter = ""
     params: dict = {"window_start": window_start, "window_end": window_end}

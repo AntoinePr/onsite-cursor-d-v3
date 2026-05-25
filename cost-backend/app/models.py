@@ -24,6 +24,7 @@ class Usage(Base):
     event_id = Column(String(200), nullable=False, index=True)
     org_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(100), nullable=False, index=True)
+    session_name = Column(String(100), nullable=True)
     provider = Column(String(50), nullable=False)
     model = Column(String(100), nullable=False)
     event_type = Column(String(50), nullable=False)
