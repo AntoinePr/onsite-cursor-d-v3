@@ -60,7 +60,7 @@ def _trunc_bucket(dt: datetime, granularity: str) -> datetime:
     raise ValueError(f"Unknown granularity: {granularity}")
 
 
-SKIP_USAGE_TYPES = {"total_tokens"}
+SKIP_USAGE_TYPES = {"total_tokens", "token_fee"}
 
 
 def flatten_usage(usage: dict) -> list[tuple[str, int]]:
@@ -136,6 +136,39 @@ async def process_usage_event(event: dict):
 
             total_event_cost += row_total_cost
             total_event_tokens += quantity
+
+        if total_event_tokens > 0:
+            fee_usage_id = uuid.uuid4()
+            fee_stmt = (
+                pg_insert(Usage.__table__)
+                .values(
+                    id=fee_usage_id,
+                    event_id=event_id,
+                    org_id=org_id,
+                    session_id=session_id,
+                    provider=provider,
+                    model=model,
+                    event_type=event_type,
+                    usage_type="token_fee",
+                    quantity=total_event_tokens,
+                )
+                .on_conflict_do_nothing(constraint="uq_event_usage_type")
+                .returning(Usage.__table__.c.id)
+            )
+            fee_result = await db.execute(fee_stmt)
+            fee_row = fee_result.scalar_one_or_none()
+
+            if fee_row is not None:
+                fee_unit_cost = Decimal(str(get_unit_cost(provider, model, "token_fee")))
+                fee_total_cost = fee_unit_cost * total_event_tokens
+                db.add(Cost(
+                    usage_id=fee_usage_id,
+                    usage_type="token_fee",
+                    unit_cost=fee_unit_cost,
+                    total_cost=fee_total_cost,
+                ))
+                total_event_cost += fee_total_cost
+                inserted_count += 1
 
         await db.commit()
 

@@ -45,7 +45,7 @@ graph LR
   Agent -->|"POST /usage"| UsageAPI
   UsageAPI -->|"LPUSH"| Redis
   Redis -->|"BRPOP"| CostBackend
-  CostBackend -->|"WebSocket"| CostUI
+  CostBackend -->|"HTTP poll"| CostUI
 
   style agentBox fill:#2d3748,stroke:#4a90d9,color:#fff
   style Agent fill:#4a90d9,stroke:#2b6cb0,color:#fff
@@ -62,83 +62,54 @@ graph LR
 
 ---
 
-## Pipeline Flow
-
-```mermaid
-sequenceDiagram
-  participant A as Agent
-  participant U as Usage API
-  participant R as Redis
-  participant C as Cost Backend
-  participant DB as Billing DB
-  participant B as Browser
-
-  A->>U: POST /usage (model, tokens, session_id, tags)
-  U->>R: LPUSH usage_queue
-  R->>C: BRPOP usage_queue
-  C->>C: Compute cost (static pricing table)
-  C->>DB: INSERT cost record
-  C->>B: WebSocket push (live cost update)
-```
-
----
-
-## Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| Agent is the sole usage producer | Single source of truth — only the LLM loop emits events |
-| Ephemeral Billing DB (no Docker volume) | POC trade-off — all cost data wipes on restart |
-| Decoupled ingestion & processing | Usage API and Cost Backend are separate services joined by Redis, mirroring production patterns (Kafka, SQS) |
-| Fire-and-forget from agent | Billing failures never block the chat flow |
-| Flexible JSONB `tags` on events | Enables arbitrary group-by breakdowns without schema changes |
-| Real-time WebSocket delivery | Sub-second cost updates pushed to the browser |
-
 ---
 
 ## Data Schema
 
-Data flows through three successive shapes: the **ingestion event**, the **usage record**, and the **cost record**.
+One ingestion event fans out into multiple `usage` rows (one per usage type), each linked to a `costs` row. Pricing is driven by `list_prices`.
 
-### 1. Usage Event (POST /usage → Redis)
+```mermaid
+erDiagram
+    usage {
+        UUID id PK
+        VARCHAR200 event_id IX "UQ(event_id, usage_type)"
+        INT org_id IX
+        VARCHAR100 session_id IX
+        VARCHAR50 provider
+        VARCHAR100 model
+        VARCHAR50 event_type
+        VARCHAR100 usage_type
+        INT quantity
+        TIMESTAMPTZ created_at
+    }
 
-| Field | Description |
-|-------|-------------|
-| `event_type` | Kind of event (e.g. `llm_completion`) |
-| `org_id` | Organization identifier |
-| `provider` | LLM provider (e.g. `openai`) |
-| `model` | Model used (e.g. `gpt-4o`) |
-| `session_id` | Session that triggered the call |
-| `timestamp` | ISO-8601 event time |
-| `usage` | Dict of usage quantities — keys are usage types (e.g. `prompt_tokens`, `completion_tokens`) |
+    costs {
+        UUID id PK
+        UUID usage_id FK "ON DELETE CASCADE"
+        VARCHAR100 usage_type
+        NUMERIC_20_12 unit_cost
+        NUMERIC_20_12 total_cost "quantity x unit_cost"
+        TIMESTAMPTZ created_at
+    }
 
-### 2. `usage` table (Billing DB)
+    list_prices {
+        UUID id PK
+        VARCHAR50 provider "UQ(provider, model, usage_type)"
+        VARCHAR100 model
+        VARCHAR100 usage_type
+        NUMERIC_20_12 unit_cost
+        TIMESTAMPTZ created_at
+    }
 
-| Column | Description |
-|--------|-------------|
-| `id` | Primary key (UUID) |
-| `event_id` | Unique event identifier for dedup |
-| `org_id` | Organization identifier |
-| `session_id` | Session that produced this usage |
-| `provider` | LLM provider |
-| `model` | Model name |
-| `event_type` | Kind of event |
-| `usage_type` | Specific metric (e.g. `prompt_tokens`) |
-| `quantity` | Raw count for this usage type |
-| `created_at` | Timestamp of record creation |
+    pricing_updates {
+        VARCHAR50 provider PK
+        TIMESTAMPTZ last_update
+    }
 
-> One ingestion event fans out into multiple `usage` rows — one per key in the `usage` dict.
-
-### 3. `costs` table (Billing DB)
-
-| Column | Description |
-|--------|-------------|
-| `id` | Primary key (UUID) |
-| `usage_id` | FK → `usage.id` (cascading delete) |
-| `usage_type` | Mirrors usage type for easy querying |
-| `unit_cost` | Per-unit price applied |
-| `total_cost` | `quantity × unit_cost` |
-| `created_at` | Timestamp of record creation |
+    usage ||--|| costs : "1:1"
+    list_prices ||--o{ costs : "provides unit_cost"
+    pricing_updates ||--o{ list_prices : "tracks freshness"
+```
 
 ---
 
@@ -170,31 +141,5 @@ Data flows through three successive shapes: the **ingestion event**, the **usage
 | `session_id` | UUID | Filter to a specific session |
 | `metric` | `cost`, `usage` | Toggle between dollar costs and raw token counts (frontend toggle) |
 
-The frontend polls `/cost` or `/usage` every 5 seconds. The `group_by` and `session_id` params are independent — users can filter to one session while grouping by usage type, or group by session across all data.
+The frontend polls the cost-backend's `/cost` or `/usage` endpoints every 5 seconds. The `group_by` and `session_id` params are independent — users can filter to one session while grouping by usage type, or group by session across all data.
 
----
-
-## Spending Limits
-
-| Scope | Action | Behavior |
-|-------|--------|----------|
-| Session | **Warn** | Push warning banner to browser when threshold is approached |
-| Session | **Block** | Stop all LLM calls for the session; notify browser |
-| Global | **Warn / Block** | Same actions, applied across all sessions |
-
-Enforcement is **eventual** — the event that crosses a limit is the last one allowed; the block takes effect before the next LLM call.
-
-```mermaid
-sequenceDiagram
-  participant C as Cost Backend
-  participant DB as Billing DB
-  participant CP as Control Plane
-  participant B as Browser
-
-  C->>DB: Write cost record
-  C->>DB: Check spending limits
-  alt Limit exceeded
-    C->>CP: POST /internal/session/{id}/block
-    CP->>B: WebSocket alert (blocked)
-  end
-```

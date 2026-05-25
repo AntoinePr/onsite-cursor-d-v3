@@ -15,6 +15,7 @@ SEED_PRICES = [
     ("openai", "gpt-4o", "prompt_tokens", 2.50 / 1_000_000),
     ("openai", "gpt-4o", "cached_tokens", 1.25 / 1_000_000),
     ("openai", "gpt-4o", "completion_tokens", 10.00 / 1_000_000),
+    ("*", "*", "token_fee", 0.25 / 1_000_000),
 ]
 
 _pricing_cache: dict[tuple[str, str, str], float] = {}
@@ -24,7 +25,10 @@ DEFAULT_UNIT_COST = 0.0
 
 
 def get_unit_cost(provider: str, model: str, usage_type: str) -> float:
-    return _pricing_cache.get((provider, model, usage_type), DEFAULT_UNIT_COST)
+    cost = _pricing_cache.get((provider, model, usage_type))
+    if cost is not None:
+        return cost
+    return _pricing_cache.get(("*", "*", usage_type), DEFAULT_UNIT_COST)
 
 
 async def seed_pricing():
