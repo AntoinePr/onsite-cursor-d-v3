@@ -446,6 +446,11 @@
     }
 
     function handleMessage(data) {
+      if (data.message_id) {
+        if (renderedMessageIds.has(data.message_id)) return;
+        renderedMessageIds.add(data.message_id);
+      }
+
       switch (data.type) {
         case 'session_status':
           if (data.is_busy) setProcessing(true);

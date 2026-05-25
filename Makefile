@@ -29,3 +29,10 @@ chaos-kill-worker:
 	@WORKER=$$(docker compose ps --format '{{.Name}}' | grep worker | shuf -n 1); \
 	echo "Killing $$WORKER..."; \
 	docker kill $$WORKER
+
+chaos-duplicate:
+	@echo "Fetching most recent dispatch..."; \
+	TC_ID=$$(curl -s http://localhost:8000/debug/dispatches | python3 -c "import sys,json; d=json.load(sys.stdin)['dispatches']; print(d[0]['tool_call_id'] if d else '')"); \
+	if [ -z "$$TC_ID" ]; then echo "No dispatches found"; exit 1; fi; \
+	echo "Replaying tool_call_id=$$TC_ID..."; \
+	curl -s -X POST "http://localhost:8000/debug/replay/$$TC_ID" | python3 -m json.tool

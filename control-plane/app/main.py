@@ -10,10 +10,11 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from openai import AsyncOpenAI
-from sqlalchemy import select, delete
+from datetime import timedelta
+from sqlalchemy import select, delete, and_
 
 from app.database import async_session, init_db
-from app.models import Message, Session, SESSION_TTL
+from app.models import Message, Session, ToolCallDispatch, SESSION_TTL
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("control-plane")
@@ -213,7 +214,17 @@ class WorkerPool:
         if worker_name not in self._worker_session and session_id:
             self.bind_worker(worker_name, session_id)
 
-        logger.info(f"Dispatching {function_name} (id={tool_call_id}) to {worker_name}")
+        message_id = str(uuid.uuid4())
+        logger.info(f"Dispatching {function_name} (id={tool_call_id}, msg={message_id[:8]}) to {worker_name}")
+
+        async with async_session() as db:
+            db.add(ToolCallDispatch(
+                tool_call_id=tool_call_id,
+                session_id=uuid.UUID(session_id) if session_id else uuid.uuid4(),
+                worker_name=worker_name,
+                status="dispatched",
+            ))
+            await db.commit()
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
@@ -222,6 +233,7 @@ class WorkerPool:
 
         await ws.send_json({
             "type": "tool_call_request",
+            "message_id": message_id,
             "payload": {
                 "tool_call_id": tool_call_id,
                 "function_name": function_name,
@@ -235,13 +247,30 @@ class WorkerPool:
         except asyncio.TimeoutError:
             self._pending.pop(tool_call_id, None)
             self._pending_worker.pop(tool_call_id, None)
+            async with async_session() as db:
+                dispatch = await db.execute(
+                    select(ToolCallDispatch).where(ToolCallDispatch.tool_call_id == tool_call_id)
+                )
+                row = dispatch.scalar_one_or_none()
+                if row:
+                    row.status = "failed"
+                    await db.commit()
             return worker_name, json.dumps({"error": f"Tool call timed out on {worker_name}"})
 
-    def resolve_tool_call(self, tool_call_id: str, result: str):
+    async def resolve_tool_call(self, tool_call_id: str, result: str):
         future = self._pending.pop(tool_call_id, None)
         self._pending_worker.pop(tool_call_id, None)
         if future and not future.done():
             future.set_result(result)
+        async with async_session() as db:
+            row = await db.execute(
+                select(ToolCallDispatch).where(ToolCallDispatch.tool_call_id == tool_call_id)
+            )
+            dispatch = row.scalar_one_or_none()
+            if dispatch:
+                dispatch.status = "completed"
+                dispatch.completed_at = datetime.now(timezone.utc)
+                await db.commit()
 
     async def terminate_worker(self, worker_name: str, reason: str):
         ws = self.workers.get(worker_name)
@@ -293,6 +322,8 @@ class SessionState:
         self.expires_at = self.last_active_at + SESSION_TTL
 
     async def send_to_browser(self, msg: dict):
+        if "message_id" not in msg:
+            msg["message_id"] = str(uuid.uuid4())
         await self.outbound_queue.put(msg)
 
     async def _delivery_loop(self):
@@ -357,9 +388,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
     reaper = asyncio.create_task(_session_reaper())
+    dispatch_reaper = asyncio.create_task(_dispatch_reaper())
     yield
     logger.info("Shutting down gracefully...")
     reaper.cancel()
+    dispatch_reaper.cancel()
     for state in session_manager.all_sessions():
         if state.active_llm_task and not state.active_llm_task.done():
             state.active_llm_task.cancel()
@@ -394,6 +427,45 @@ async def _session_reaper():
                 if sess:
                     sess.status = "expired"
                     await db.commit()
+
+
+ACK_TIMEOUT = timedelta(seconds=5)
+
+
+async def _dispatch_reaper():
+    """Timeout unacked dispatches every 5s and trigger retries."""
+    while True:
+        await asyncio.sleep(5)
+        cutoff = datetime.now(timezone.utc) - ACK_TIMEOUT
+        try:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(ToolCallDispatch).where(
+                        and_(
+                            ToolCallDispatch.status == "dispatched",
+                            ToolCallDispatch.dispatched_at < cutoff,
+                        )
+                    )
+                )
+                stale = result.scalars().all()
+                for dispatch in stale:
+                    dispatch.retry_count += 1
+                    dispatch.status = "failed"
+                    await db.commit()
+                    future = worker_pool._pending.get(dispatch.tool_call_id)
+                    if future and not future.done():
+                        future.set_result(json.dumps({
+                            "error": f"No ACK from {dispatch.worker_name} within {ACK_TIMEOUT.seconds}s",
+                            "_retry": True,
+                        }))
+                        worker_pool._pending.pop(dispatch.tool_call_id, None)
+                        worker_pool._pending_worker.pop(dispatch.tool_call_id, None)
+                    logger.info(
+                        f"Dispatch reaper: timed out {dispatch.tool_call_id} on {dispatch.worker_name} "
+                        f"(retry #{dispatch.retry_count})"
+                    )
+        except Exception as e:
+            logger.error(f"Dispatch reaper error: {e}")
 
 
 app = FastAPI(title="Remote Tool Execution Control Plane", lifespan=lifespan)
@@ -473,6 +545,77 @@ async def api_get_messages(session_id: str):
                     "tool_call_id": m.tool_call_id,
                 }
                 for m in messages
+            ]
+        }
+
+
+@app.post("/debug/replay/{tool_call_id}")
+async def debug_replay(tool_call_id: str):
+    """Re-send a tool_call_request to test worker idempotency."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(ToolCallDispatch).where(ToolCallDispatch.tool_call_id == tool_call_id)
+        )
+        dispatch = result.scalar_one_or_none()
+        if not dispatch:
+            return {"error": "Dispatch not found"}
+
+    worker_name = dispatch.worker_name
+    ws = worker_pool.workers.get(worker_name)
+    if not ws:
+        return {"error": f"Worker {worker_name} not connected"}
+
+    msg = await db.execute(
+        select(Message).where(
+            and_(Message.tool_call_id == tool_call_id, Message.role == "assistant")
+        )
+    )
+
+    message_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[str] = loop.create_future()
+    worker_pool._pending[tool_call_id] = future
+    worker_pool._pending_worker[tool_call_id] = worker_name
+
+    await ws.send_json({
+        "type": "tool_call_request",
+        "message_id": message_id,
+        "payload": {
+            "tool_call_id": tool_call_id,
+            "function_name": "replay",
+            "arguments": {},
+        },
+    })
+
+    try:
+        result_str = await asyncio.wait_for(future, timeout=10.0)
+        return {"replayed": tool_call_id, "worker": worker_name, "result": result_str, "message_id": message_id}
+    except asyncio.TimeoutError:
+        worker_pool._pending.pop(tool_call_id, None)
+        worker_pool._pending_worker.pop(tool_call_id, None)
+        return {"error": "Replay timed out"}
+
+
+@app.get("/debug/dispatches")
+async def debug_list_dispatches():
+    """List recent dispatches for debugging."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(ToolCallDispatch).order_by(ToolCallDispatch.dispatched_at.desc()).limit(20)
+        )
+        rows = result.scalars().all()
+        return {
+            "dispatches": [
+                {
+                    "tool_call_id": r.tool_call_id,
+                    "worker_name": r.worker_name,
+                    "status": r.status,
+                    "retry_count": r.retry_count,
+                    "dispatched_at": r.dispatched_at.isoformat() if r.dispatched_at else None,
+                    "acked_at": r.acked_at.isoformat() if r.acked_at else None,
+                    "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                }
+                for r in rows
             ]
         }
 
@@ -817,8 +960,22 @@ async def ws_worker(websocket: WebSocket):
                 error = p.get("error")
                 if error:
                     result = json.dumps({"error": error})
-                worker_pool.resolve_tool_call(tool_call_id, result)
+                await worker_pool.resolve_tool_call(tool_call_id, result)
                 logger.info(f"Tool result from {worker_name}: {tool_call_id}")
+            elif data.get("type") == "ack":
+                msg_id = data.get("message_id", "")
+                tc_id = data.get("tool_call_id", "")
+                logger.info(f"ACK from {worker_name}: message_id={msg_id[:8]} tool_call_id={tc_id}")
+                if tc_id:
+                    async with async_session() as db:
+                        row = await db.execute(
+                            select(ToolCallDispatch).where(ToolCallDispatch.tool_call_id == tc_id)
+                        )
+                        dispatch = row.scalar_one_or_none()
+                        if dispatch and dispatch.status == "dispatched":
+                            dispatch.status = "acked"
+                            dispatch.acked_at = datetime.now(timezone.utc)
+                            await db.commit()
             elif data.get("type") == "heartbeat":
                 await websocket.send_json({"type": "heartbeat_ack"})
 

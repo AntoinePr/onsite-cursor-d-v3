@@ -6,6 +6,7 @@ import platform
 import signal
 import subprocess
 import sys
+import time
 
 import websockets
 
@@ -86,18 +87,36 @@ TOOL_HANDLERS = {
 }
 
 
+IDEMPOTENCY_TTL = 60
+_completed_calls: dict[str, tuple[str, float]] = {}
+
+
+def _evict_stale_cache():
+    now = time.time()
+    expired = [k for k, (_, ts) in _completed_calls.items() if now - ts > IDEMPOTENCY_TTL]
+    for k in expired:
+        del _completed_calls[k]
+
+
 async def handle_tool_call(ws, payload: dict):
     tool_call_id = payload["tool_call_id"]
     function_name = payload["function_name"]
     arguments = payload.get("arguments", {})
 
-    logger.info(f"Executing {function_name} (id={tool_call_id})")
+    _evict_stale_cache()
 
-    handler = TOOL_HANDLERS.get(function_name)
-    if handler is None:
-        result = json.dumps({"error": f"Unknown function: {function_name}"})
+    cached = _completed_calls.get(tool_call_id)
+    if cached and (time.time() - cached[1]) < IDEMPOTENCY_TTL:
+        logger.info(f"Idempotency cache hit for {tool_call_id}, returning cached result")
+        result = cached[0]
     else:
-        result = await asyncio.get_event_loop().run_in_executor(None, handler, arguments)
+        logger.info(f"Executing {function_name} (id={tool_call_id})")
+        handler = TOOL_HANDLERS.get(function_name)
+        if handler is None:
+            result = json.dumps({"error": f"Unknown function: {function_name}"})
+        else:
+            result = await asyncio.get_event_loop().run_in_executor(None, handler, arguments)
+        _completed_calls[tool_call_id] = (result, time.time())
 
     await ws.send(
         json.dumps(
@@ -147,6 +166,13 @@ async def connect():
                     async for raw_message in ws:
                         message = json.loads(raw_message)
                         if message.get("type") == "tool_call_request":
+                            msg_id = message.get("message_id", "")
+                            tc_id = message["payload"].get("tool_call_id", "")
+                            await ws.send(json.dumps({
+                                "type": "ack",
+                                "message_id": msg_id,
+                                "tool_call_id": tc_id,
+                            }))
                             asyncio.create_task(
                                 handle_tool_call(ws, message["payload"])
                             )
