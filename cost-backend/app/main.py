@@ -12,6 +12,7 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import async_session, init_db
 from app.models import Cost, Usage
@@ -77,7 +78,7 @@ def flatten_usage(usage: dict) -> list[tuple[str, int]]:
 
 
 async def process_usage_event(event: dict):
-    event_id = uuid.uuid4()
+    event_id = event.get("call_id") or str(uuid.uuid4())
     org_id = event.get("org_id", 1)
     session_id = event["session_id"]
     provider = event["provider"]
@@ -92,27 +93,41 @@ async def process_usage_event(event: dict):
 
     total_event_cost = Decimal(0)
     total_event_tokens = 0
+    inserted_count = 0
 
     async with async_session() as db:
         for usage_type, quantity in metering_rows:
-            usage_row = Usage(
-                event_id=event_id,
-                org_id=org_id,
-                session_id=session_id,
-                provider=provider,
-                model=model,
-                event_type=event_type,
-                usage_type=usage_type,
-                quantity=quantity,
-            )
-            db.add(usage_row)
-            await db.flush()
+            usage_id = uuid.uuid4()
 
+            stmt = (
+                pg_insert(Usage.__table__)
+                .values(
+                    id=usage_id,
+                    event_id=event_id,
+                    org_id=org_id,
+                    session_id=session_id,
+                    provider=provider,
+                    model=model,
+                    event_type=event_type,
+                    usage_type=usage_type,
+                    quantity=quantity,
+                )
+                .on_conflict_do_nothing(constraint="uq_event_usage_type")
+                .returning(Usage.__table__.c.id)
+            )
+            result = await db.execute(stmt)
+            row = result.scalar_one_or_none()
+
+            if row is None:
+                logger.info(f"Duplicate skipped: event_id={event_id[:16]} usage_type={usage_type}")
+                continue
+
+            inserted_count += 1
             unit_cost = Decimal(str(get_unit_cost(provider, model, usage_type)))
             row_total_cost = unit_cost * quantity
 
             cost_row = Cost(
-                usage_id=usage_row.id,
+                usage_id=usage_id,
                 usage_type=usage_type,
                 unit_cost=unit_cost,
                 total_cost=row_total_cost,
@@ -124,10 +139,13 @@ async def process_usage_event(event: dict):
 
         await db.commit()
 
-    logger.info(
-        f"Processed event {event_id}: {len(metering_rows)} usage rows, "
-        f"total_cost=${float(total_event_cost):.8f}, session={session_id[:8]}"
-    )
+    if inserted_count > 0:
+        logger.info(
+            f"Processed event {event_id[:16]}: {inserted_count}/{len(metering_rows)} new usage rows, "
+            f"total_cost=${float(total_event_cost):.8f}, session={session_id[:8]}"
+        )
+    else:
+        logger.info(f"Duplicate event {event_id[:16]} fully skipped for session {session_id[:8]}")
 
 
 async def get_history(

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -19,6 +20,7 @@ redis_client: aioredis.Redis | None = None
 
 
 class UsageEvent(BaseModel):
+    call_id: str | None = None
     event_type: str
     org_id: int
     provider: str
@@ -42,8 +44,11 @@ app = FastAPI(title="Usage API", lifespan=lifespan)
 
 
 @app.post("/usage", status_code=202)
-async def ingest_usage(event: UsageEvent):
-    payload = event.model_dump()
-    await redis_client.lpush(USAGE_QUEUE, json.dumps(payload))
-    logger.info(f"Enqueued usage event: event_type={event.event_type} model={event.model} session={event.session_id[:8]}")
-    return JSONResponse(status_code=202, content={"status": "accepted"})
+async def ingest_usage(events: list[UsageEvent]):
+    for event in events:
+        if event.call_id is None:
+            event.call_id = str(uuid.uuid4())
+        payload = event.model_dump()
+        await redis_client.lpush(USAGE_QUEUE, json.dumps(payload))
+        logger.info(f"Enqueued usage event: call_id={event.call_id[:16]} model={event.model} session={event.session_id[:8]}")
+    return JSONResponse(status_code=202, content={"status": "accepted", "count": len(events)})

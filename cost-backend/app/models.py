@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase
 
@@ -16,9 +16,12 @@ class Base(DeclarativeBase):
 
 class Usage(Base):
     __tablename__ = "usage"
+    __table_args__ = (
+        UniqueConstraint("event_id", "usage_type", name="uq_event_usage_type"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    event_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    event_id = Column(String(200), nullable=False, index=True)
     org_id = Column(Integer, nullable=False, index=True)
     session_id = Column(String(100), nullable=False, index=True)
     provider = Column(String(50), nullable=False)

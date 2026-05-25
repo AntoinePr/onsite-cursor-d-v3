@@ -389,42 +389,6 @@
       font-size: 14px;
     }
 
-    .cost-panel-body {
-      padding: 10px 14px;
-      font-family: 'SF Mono', Menlo, monospace;
-      font-size: 12px;
-    }
-
-    .cost-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 3px 0;
-      color: #aaa;
-    }
-
-    .cost-row .cost-label { color: #888; }
-    .cost-row .cost-value { color: #4ade80; font-weight: 600; }
-    .cost-row.total { border-top: 1px solid #2a2a3e; margin-top: 4px; padding-top: 6px; }
-    .cost-row.total .cost-value { color: #a78bfa; font-size: 14px; }
-
-    .sidebar-nav-tab {
-      padding: 10px 14px;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: #888;
-      background: #1a1a2e;
-      cursor: pointer;
-      border-bottom: 1px solid #2a2a3e;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
-    }
-    .sidebar-nav-tab:hover { background: #222240; color: #a78bfa; }
-    .sidebar-nav-tab.active { color: #a78bfa; background: #1a1a30; border-left: 2px solid #a78bfa; }
-
     .cost-dashboard {
       flex: 1;
       display: flex;
@@ -598,11 +562,7 @@
     </div>
 
     <div class="sidebar">
-      <div style="display: flex; flex-shrink: 0;">
-        <div class="sidebar-nav-tab active" id="sessions-tab" onclick="showSessionsView()" style="flex: 1; justify-content: center;">Sessions</div>
-        <div class="sidebar-nav-tab" id="cost-tab" onclick="showCostDashboard()" style="flex: 1; justify-content: center;">Usage & Cost</div>
-      </div>
-      <div id="sessions-panels">
+      <div id="sessions-panels" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
         <div class="sidebar-panel" style="flex: 0 0 auto;">
           <div class="sidebar-panel-header">Workers <span id="worker-count">0</span></div>
           <div class="sidebar-panel-body" id="workers-list"></div>
@@ -611,29 +571,20 @@
           <div class="sidebar-panel-header">Active Sessions</div>
           <div class="sidebar-panel-body" id="sessions-list"></div>
         </div>
-        <div class="sidebar-panel" style="flex: 1;">
+        <div class="sidebar-panel" style="flex: 1; min-height: 0;">
           <div class="sidebar-panel-header">Past Sessions</div>
           <div class="sidebar-panel-body" id="past-sessions-list"></div>
         </div>
-        <div class="sidebar-panel" style="flex: 0 0 auto;">
-          <div class="sidebar-panel-header">Usage & Cost</div>
-          <div class="sidebar-panel-body cost-panel-body" id="cost-panel">
-            <div class="cost-row">
-              <span class="cost-label">Tokens</span>
-              <span class="cost-value" id="cost-tokens">0</span>
-            </div>
-            <div class="cost-row total">
-              <span class="cost-label">Total Cost</span>
-              <span class="cost-value" id="cost-total">$0.000000</span>
-            </div>
-          </div>
-        </div>
+      </div>
+      <div style="flex-shrink: 0; border-top: 1px solid #2a2a3e; cursor: pointer; padding: 10px 14px;" onclick="showCostDashboard()" onmouseenter="this.style.background='#1a1a30'" onmouseleave="this.style.background=''">
+        <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #888;">Usage & Cost</span>
       </div>
     </div>
 
     <div class="cost-dashboard" id="cost-dashboard" style="display: none;">
       <div class="cost-toolbar">
         <div class="toolbar-left">
+          <button class="nav-arrow" onclick="showSessionsView()" title="Back to sessions" style="margin-right: 8px; font-size: 12px;">&larr;</button>
           <button class="nav-arrow" id="nav-left" onclick="navPeriod(-1)">&lt;</button>
           <span class="window-label" id="window-label"></span>
           <button class="nav-arrow" id="nav-right" onclick="navPeriod(1)" disabled>&gt;</button>
@@ -679,11 +630,6 @@
     const sessionsList = document.getElementById('sessions-list');
     const pastSessionsList = document.getElementById('past-sessions-list');
 
-    const costTokensEl = document.getElementById('cost-tokens');
-    const costTotalEl = document.getElementById('cost-total');
-    const costTab = document.getElementById('cost-tab');
-    const sessionsTab = document.getElementById('sessions-tab');
-    const sessionsPanels = document.getElementById('sessions-panels');
     const costDashboard = document.getElementById('cost-dashboard');
     const chatArea = document.querySelector('.chat-area');
     const rechartsMount = document.getElementById('recharts-mount');
@@ -758,14 +704,7 @@
       }
     }
 
-    async function fetchSidebarTile() {
-      try {
-        const res = await fetch(`http://${location.hostname}:8002/cost`);
-        const data = await res.json();
-        costTokensEl.textContent = (data.total_tokens || 0).toLocaleString();
-        costTotalEl.textContent = '$' + (data.total_cost || 0).toFixed(6);
-      } catch {}
-    }
+    async function fetchSidebarTile() {}
 
     function startCostPolling() {
       if (costPollTimer) return;
@@ -803,9 +742,6 @@
       costDashboardVisible = true;
       chatArea.style.display = 'none';
       costDashboard.style.display = 'flex';
-      sessionsPanels.style.display = 'none';
-      costTab.classList.add('active');
-      sessionsTab.classList.remove('active');
       if (pushState) history.pushState({ view: 'cost' }, '', '/usage-and-cost');
       startCostPolling();
     }
@@ -814,9 +750,6 @@
       costDashboardVisible = false;
       costDashboard.style.display = 'none';
       chatArea.style.display = 'flex';
-      sessionsPanels.style.display = '';
-      costTab.classList.remove('active');
-      sessionsTab.classList.add('active');
       if (pushState) history.pushState({ view: 'sessions' }, '', '/sessions');
       stopCostPolling();
     }
@@ -1029,8 +962,6 @@
     }
 
     function resetCostPanel() {
-      costTokensEl.textContent = '0';
-      costTotalEl.textContent = '$0.000000';
       dashTotal.textContent = '$0.000000';
       costHistory = [];
       costGroups = null;

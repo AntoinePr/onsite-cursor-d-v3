@@ -3,15 +3,15 @@ import json
 import logging
 import os
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from openai import AsyncOpenAI
-from datetime import timedelta
 from sqlalchemy import select, delete, and_
 
 from app.database import async_session, init_db
@@ -420,11 +420,13 @@ async def lifespan(app: FastAPI):
     reaper = asyncio.create_task(_session_reaper())
     dispatch_reaper = asyncio.create_task(_dispatch_reaper())
     health_checker = asyncio.create_task(_worker_health_checker())
+    usage_flusher = asyncio.create_task(_usage_flush_loop())
     yield
     logger.info("Shutting down gracefully...")
     reaper.cancel()
     dispatch_reaper.cancel()
     health_checker.cancel()
+    usage_flusher.cancel()
     for state in session_manager.all_sessions():
         if state.active_llm_task and not state.active_llm_task.done():
             state.active_llm_task.cancel()
@@ -919,22 +921,64 @@ async def handle_user_message(state: SessionState, content: str):
         await state.send_to_browser({"type": "error", "content": str(e)})
 
 
-async def _emit_usage(session_id: str, usage):
-    """Fire-and-forget usage event to the Usage API."""
-    try:
-        payload = {
-            "event_type": "llm_call",
-            "org_id": 1,
-            "provider": "openai",
-            "model": "gpt-4o-mini",
-            "session_id": session_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "usage": usage.model_dump() if hasattr(usage, "model_dump") else dict(usage),
-        }
-        await usage_http_client.post(f"{USAGE_API_URL}/usage", json=payload)
-        logger.info(f"Usage event sent for session {session_id[:8]}")
-    except Exception as e:
-        logger.warning(f"Failed to send usage event: {e}")
+USAGE_BUFFER_MAX = 500
+USAGE_FLUSH_INTERVAL = 2.0
+
+
+class UsageBuffer:
+    def __init__(self, maxlen: int = USAGE_BUFFER_MAX):
+        self._buffer: deque[dict] = deque(maxlen=maxlen)
+
+    def append(self, event: dict):
+        self._buffer.append(event)
+
+    def drain(self) -> list[dict]:
+        items = list(self._buffer)
+        self._buffer.clear()
+        return items
+
+    def requeue(self, events: list[dict]):
+        for event in reversed(events):
+            if len(self._buffer) < self._buffer.maxlen:
+                self._buffer.appendleft(event)
+
+    def __len__(self) -> int:
+        return len(self._buffer)
+
+
+usage_buffer = UsageBuffer()
+
+
+async def _usage_flush_loop():
+    while True:
+        await asyncio.sleep(USAGE_FLUSH_INTERVAL)
+        batch = usage_buffer.drain()
+        if not batch:
+            continue
+        try:
+            resp = await usage_http_client.post(
+                f"{USAGE_API_URL}/usage", json=batch,
+            )
+            resp.raise_for_status()
+            logger.info(f"Flushed {len(batch)} usage event(s)")
+        except Exception as e:
+            logger.warning(f"Usage flush failed ({len(batch)} events requeued): {e}")
+            usage_buffer.requeue(batch)
+
+
+def _emit_usage(session_id: str, usage, call_id: str):
+    payload = {
+        "call_id": call_id,
+        "event_type": "llm_call",
+        "org_id": 1,
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "usage": usage.model_dump() if hasattr(usage, "model_dump") else dict(usage),
+    }
+    usage_buffer.append(payload)
+    logger.info(f"Usage event buffered for session {session_id[:8]} (call_id={call_id[:16]}, buffer={len(usage_buffer)})")
 
 
 async def run_llm_loop(state: SessionState, messages: list[dict]):
@@ -960,8 +1004,12 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
         tool_call_chunks: dict[int, dict] = {}
         finish_reason = None
         stream_usage = None
+        chunk_call_id: str | None = None
 
         async for chunk in stream:
+            if chunk.id and not chunk_call_id:
+                chunk_call_id = chunk.id
+
             if chunk.usage:
                 stream_usage = chunk.usage
 
@@ -998,7 +1046,7 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
                             entry["function"]["arguments"] += tc_delta.function.arguments
 
         if stream_usage:
-            asyncio.create_task(_emit_usage(str(sid), stream_usage))
+            _emit_usage(str(sid), stream_usage, call_id=chunk_call_id or str(uuid.uuid4()))
 
         full_content = "".join(content_parts) or None
         tool_calls_data = None
