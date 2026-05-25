@@ -41,3 +41,24 @@ class Cost(Base):
     unit_cost = Column(Numeric(20, 12), nullable=False)
     total_cost = Column(Numeric(20, 12), nullable=False)
     created_at = Column(DateTime(timezone=True), default=_now)
+
+
+class ListPrice(Base):
+    __tablename__ = "list_prices"
+    __table_args__ = (
+        UniqueConstraint("provider", "model", "usage_type", name="uq_list_price"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider = Column(String(50), nullable=False)
+    model = Column(String(100), nullable=False)
+    usage_type = Column(String(100), nullable=False)
+    unit_cost = Column(Numeric(20, 12), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_now)
+
+
+class PricingUpdate(Base):
+    __tablename__ = "pricing_updates"
+
+    provider = Column(String(50), primary_key=True)
+    last_update = Column(DateTime(timezone=True), nullable=False, default=_now)

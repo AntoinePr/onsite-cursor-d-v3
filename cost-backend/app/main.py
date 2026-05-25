@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import async_session, init_db
 from app.models import Cost, Usage
-from app.pricing import get_unit_cost
+from app.pricing import check_and_refresh, get_unit_cost, load_pricing_cache, seed_pricing
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cost-backend")
@@ -288,18 +288,32 @@ async def redis_consumer():
             await asyncio.sleep(1)
 
 
+async def pricing_refresh_loop():
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            await check_and_refresh()
+        except Exception as e:
+            logger.error(f"Pricing refresh error: {e}", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client
     await init_db()
     logger.info("Billing database initialized")
 
+    await seed_pricing()
+    await load_pricing_cache()
+
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
     logger.info(f"Connected to Redis at {REDIS_URL}")
 
     consumer_task = asyncio.create_task(redis_consumer())
+    refresh_task = asyncio.create_task(pricing_refresh_loop())
     yield
     consumer_task.cancel()
+    refresh_task.cancel()
     if redis_client:
         await redis_client.close()
 
