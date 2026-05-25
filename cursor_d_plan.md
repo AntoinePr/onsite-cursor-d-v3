@@ -18,9 +18,9 @@
 
 ---
 
-## Milestone 1: Scaffolding + End-to-End MVP (~60 min)
+## Milestone 1: Full End-to-End MVP (~90 min)
 
-Goal: Get all containers running with a working end-to-end flow -- browser sends message, control plane calls LLM, LLM requests a tool, tool request is dispatched to a worker, worker executes it, result flows back through LLM to browser.
+Goal: Stand up the entire system from scratch and get a working end-to-end flow -- browser sends message, control plane calls LLM with streaming, LLM requests a tool, tool request is dispatched to a worker, worker executes it, result flows back through LLM to browser. This is the "big bang" milestone -- the hardest and most critical.
 
 ### Files to create
 
@@ -32,12 +32,12 @@ Goal: Get all containers running with a working end-to-end flow -- browser sends
   - `GET /` serves the HTML UI
   - `WS /ws/chat/{session_id}` for browser connections
   - `WS /ws/worker` for worker connections (workers register with capabilities)
-  - LLM integration (OpenAI chat completions with tool definitions)
+  - LLM integration (OpenAI chat completions with streaming + tool definitions)
   - Worker pool management (round-robin or capability-based dispatch)
 - `control-plane/app/database.py` -- async SQLAlchemy engine + session factory
 - `control-plane/app/models.py` -- SQLAlchemy ORM models (sessions, messages, workers)
 - `control-plane/app/schemas.py` -- Pydantic models for WS message protocol
-- `control-plane/app/ui/index.html` -- minimal chat UI (vanilla JS + WebSocket)
+- `control-plane/app/ui/index.html` -- chat UI with session creation (vanilla JS + WebSocket)
 - `worker/Dockerfile`
 - `worker/requirements.txt` -- websockets, python-dotenv
 - `worker/main.py` -- connects to control plane WS, registers capabilities, listens for tool calls, executes them, returns results
@@ -45,45 +45,44 @@ Goal: Get all containers running with a working end-to-end flow -- browser sends
 
 ### MVP Tool Set (hardcoded in workers)
 
-For M1, workers support 2 simple tools:
-1. `execute_shell` -- run a shell command and return stdout/stderr
-2. `get_system_info` -- return hostname, OS, uptime, etc.
+Workers support 4 tools:
+1. `bash` -- run a shell command and return stdout/stderr
+2. `read_file` -- read file contents from the worker filesystem
+3. `write_file` -- write content to a file on the worker filesystem
+4. `get_system_info` -- return hostname, OS, uptime, etc.
 
 ### What "works" at end of M1
 - `make up` starts everything
-- Open browser to `localhost:8000`, type "what worker are you connected to?" or "list files in /tmp on worker-1"
-- LLM decides to call a tool, control plane routes it to a worker, result comes back, LLM responds
-
----
-
-## Milestone 2: Persistence, Multi-session, and Robust Worker Management (~60 min)
-
-- Full DB persistence: reload conversation history on reconnect
-- Session management UI: create/switch/delete sessions
-- Worker health monitoring: heartbeat, auto-reconnect with exponential backoff
-- Worker capability registration: workers declare what tools they support
-- Proper error handling: worker disconnects mid-tool-call, timeouts, retries
+- Open browser to `localhost:8000`, click "+ New Session"
+- Type "what worker are you connected to?" or "list files in /tmp"
+- LLM decides to call a tool, control plane routes it to a bound worker, result streams back token-by-token, LLM responds
 - Tool call status indicators in UI (pending/running/complete/failed)
-- Targeted routing: user can specify which worker should execute a tool
 
 ---
 
-## Milestone 3: Polish, Streaming, and Demo-Ready (~60 min)
+## Milestone 2: Multi-session, Persistence, and Worker Dashboard (~60 min)
 
-- LLM streaming responses (token-by-token to browser via WebSocket)
-- Worker dashboard panel in UI: show connected workers, their status, capabilities
-- Graceful shutdown handling
-- README.md with architecture diagram and setup instructions
+**Objective**: Make the system feel like a real product -- multiple sessions with full persistence, a worker dashboard, and polished session lifecycle management.
+
+### Key Outcomes
+
+1. **Full DB persistence** -- reload conversation history on browser reconnect, messages survive restarts.
+2. **Session management UI** -- sidebar with create/switch/delete sessions, active vs. past sessions split, auto-generated session names from the first user message.
+3. **Worker dashboard panel** -- sidebar shows connected workers and their bound-to-session status.
+4. **Session-worker binding** -- each session gets a dedicated worker (1:1 binding), persisted in DB and restored on reconnect.
+5. **Worker failure handling** -- worker disconnect shows failure banner with "Reconnect to new sandbox" button, auto-rebinding to available workers.
+6. **Past session viewing** -- read-only view of ended/expired sessions with full history replay.
+7. **Capacity gating** -- new sessions blocked when no workers are available, UI reflects this.
 
 ---
 
-## Milestone 4: Reliability -- At-Least-Once Delivery + Idempotency (~45 min)
+## Milestone 3: Reliability -- At-Least-Once Delivery + Idempotency (~30 min)
 
-Goal: Ensure every tool call is executed at least once (even if a worker crashes mid-flight) and that duplicate processing is impossible -- neither workers re-execute the same tool call nor the browser renders the same message twice.
+Goal: Ensure every tool call is executed at least once (even if a worker crashes mid-flight) and that duplicate processing is impossible. This is a "nice-to-have" layer -- the app works perfectly without it, but is more resilient with it.
 
 ### Message Acknowledgment Protocol
 
-Every message sent over WebSocket (control-plane-to-worker and control-plane-to-browser) gets a unique `message_id`. The receiver must reply with an explicit `ACK`:
+Every message sent over WebSocket (control-plane-to-worker) gets a unique `message_id`. The worker must reply with an explicit `ACK`:
 
 ```mermaid
 sequenceDiagram
@@ -99,29 +98,20 @@ sequenceDiagram
   CP->>W: ACK (message_id=def456)
 ```
 
-If no ACK is received within `ack_timeout` (e.g. 10s), the control plane:
-1. Marks the tool call as `pending_retry` in the DB
-2. Reassigns it to another available worker (or the same one if reconnected)
+If no ACK is received within `ack_timeout` (e.g. 5s), the control plane marks the dispatch as failed and the retry logic kicks in.
 
 ### Idempotency Keys
 
-- **Worker side**: Each tool call has a globally unique `tool_call_id`. Before executing, the worker checks a local in-memory set of already-executed IDs. If seen before, it returns the cached result without re-executing. This prevents duplicate execution on redelivery.
-- **Browser side**: Each message pushed to the browser carries a `message_id`. The UI maintains a `Set` of rendered message IDs. If a message_id was already rendered, it is silently dropped. This prevents duplicate messages in the chat.
+- **Worker side**: Each tool call has a globally unique `tool_call_id`. Before executing, the worker checks a local in-memory cache of already-executed IDs (with TTL). If seen before, it returns the cached result without re-executing.
+- **Browser side**: Each message pushed to the browser carries a `message_id`. The UI maintains a `Set` of rendered message IDs. Duplicates are silently dropped.
 - **DB side**: The `messages` table has a unique constraint on `(session_id, tool_call_id)` for tool-role messages, preventing duplicate storage.
-
-### New DB columns
-
-- **tool_call_dispatch** table (or columns on messages): `dispatch_id`, `tool_call_id`, `worker_id`, `status` (dispatched/acked/completed/timeout/failed), `dispatched_at`, `acked_at`, `completed_at`, `retry_count`
 
 ### Implementation Details
 
-- Control plane runs an async background task that periodically scans for dispatched-but-unacked tool calls past their timeout and re-dispatches them
-- Workers maintain a `dict[str, ToolResult]` cache of completed tool_call_ids so redelivered requests return instantly
-- Browser JS maintains `const renderedMessageIds = new Set()` and skips duplicates in the WebSocket `onmessage` handler
-- Add a `/debug/replay` endpoint that re-sends a tool call to test idempotency manually
-
-### Chaos Testing
-
-- `make chaos-kill-worker` -- kills a random worker container mid-execution, verify the tool call is retried on another worker
-- `make chaos-duplicate` -- sends the same tool_call_request twice to a worker, verify it only executes once
-- Add a "chaos mode" toggle in UI that randomly drops ACKs to exercise retry logic
+- `tool_call_dispatch` table tracks dispatch lifecycle: `dispatched -> acked -> completed` (or `failed`), with `retry_count`.
+- Dispatch reaper: async background task that periodically scans for dispatched-but-unacked tool calls past their timeout and marks them failed, triggering retry.
+- Worker heartbeat loop (every 15s) + health checker that force-disconnects stale workers.
+- Workers maintain a `dict[str, tuple[str, float]]` cache of completed tool_call_ids so redelivered requests return instantly.
+- `/debug/replay` endpoint to re-send a tool call and test idempotency.
+- `/debug/dispatches` endpoint to inspect dispatch state.
+- Chaos testing Makefile targets: `chaos-kill-worker`, `chaos-kill-control-plane`, `chaos-duplicate`.

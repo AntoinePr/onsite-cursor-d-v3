@@ -65,64 +65,69 @@ graph LR
 
 ---
 
-## Milestone 1: Minimal End-to-End Pipeline (~90 min)
+## Milestone 1: Full Pipeline + Basic Dashboard (~90 min)
 
-**Objective**: Wire every component together and prove the full pipeline works. Every box in the architecture diagram exists, accepts input, and produces output. Intentionally bare-bones — no breakdowns, no limits, no rich UI.
+**Objective**: Stand up the entire billing pipeline from scratch and prove it works end-to-end. Every box in the architecture diagram exists, accepts input, and produces output. The browser gets a basic but functional cost dashboard with a time-series chart.
 
 ### Key Outcomes
 
-1. **All new infrastructure starts cleanly** — Redis, Billing DB (ephemeral), Usage API, and Cost Backend all come up with `make up`.
-2. **Agent emits usage** — after each LLM streaming call completes, the control plane fires a usage event (model, token counts, session ID) to the Usage API.
+1. **All new infrastructure starts cleanly** — Redis, Billing DB (ephemeral), Usage API, and Cost Backend all come up with `make up` alongside the existing control-plane services.
+2. **Agent emits usage** — after each LLM streaming call completes, the control plane buffers usage events and flushes them to the Usage API in batches.
 3. **Usage flows through the pipeline** — Usage API enqueues to Redis; Cost Backend dequeues, computes cost from a hardcoded pricing table, and stores in Billing DB.
-4. **Browser shows live cost** — a new "Usage & Cost" tab in the left panel connects via WebSocket and displays a running total (tokens + dollars) that updates in real time.
-5. **Ephemeral data confirmed** — restarting the billing-db container wipes all cost data.
+4. **Browser shows live cost dashboard** — a new "Usage & Cost" tab in the sidebar opens a dashboard with a summary card (running total) and a time-series bar chart with cumulative overlay line, auto-refreshing every 5s.
+5. **Ephemeral data confirmed** — restarting the billing-db container wipes all cost data (no Docker volume).
 
 ### Decisions for M1
 
-- Usage event schema is minimal: `session_id`, `model`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `timestamp`, `tags` (empty object for now).
-- Cost computation uses a static in-memory pricing table (hardcoded per-model rates).
-- The agent sends usage fire-and-forget (non-blocking); billing failures do not affect the chat flow.
-- The "Usage & Cost" tab shows only a single cumulative counter — no per-call breakdown, no charts.
+- Usage event schema: `call_id`, `event_type`, `org_id`, `provider`, `model`, `session_id`, `session_name`, `timestamp`, `usage` (nested dict from OpenAI response).
+- Cost computation uses a static in-memory pricing table (hardcoded per-model rates for prompt, completion, cached tokens).
+- The agent buffers usage events and flushes every 2s (fire-and-forget); billing failures do not affect the chat flow.
+- The dashboard shows a single-metric bar chart (cost) with a cumulative line — no breakdowns yet.
+- The chart uses a 10-minute sliding window as default range.
 
 ---
 
-## Milestone 2: Usage & Cost Breakdowns (~90 min)
+## Milestone 2: Breakdowns + Rich Dashboard (~60 min)
 
-**Objective**: Let users explore their usage and costs with flexible grouping and a toggle between the two views.
+**Objective**: Make the dashboard a powerful exploration tool with flexible grouping, metric toggling, and time navigation.
 
 ### Key Outcomes
 
-1. **Usage / Cost toggle** — the "Usage & Cost" tab lets users switch between viewing raw usage quantities and computed dollar costs in the graph.
-2. **Group-by dimension selector** — users can group data by any combination of dimensions: `provider`, `model`, `usage_type`, `session_id`.
-3. **Breakdown API** — a `GET /costs/breakdown?group_by=<dim>[,<dim>...]&metric=usage|cost` endpoint returns aggregated data for the selected dimensions and metric.
-4. **Enriched UI** — the graph updates live as new events arrive, with the selected grouping and metric applied in real time.
+1. **Usage / Cost toggle** — metric selector switches between viewing dollar costs and raw token counts.
+2. **Group-by dimension selector** — users can group data by `provider`, `model`, `usage_type`, or `session_id`. Grouped data renders as stacked bars with distinct colors.
+3. **Range presets with time navigation** — range pills (10m, 1h, 1d, 1m) with clock-snapped windows. Arrow buttons navigate to previous/next periods.
+4. **Session filter** — dropdown to filter cost data to a single session.
+5. **Enriched chart** — Recharts-based ComposedChart with stacked bars, cumulative line on a secondary axis, custom tooltips, future bucket dimming, and a legend with friendly labels.
 
 ### Decisions for M2
 
-- Grouping is over first-class columns (`provider`, `model`, `usage_type`, `session_id`) — no JSONB tag queries yet.
-- The `metric` toggle controls whether the API sums `quantity` (usage) or `total_cost` (cost).
-- Multi-dimension grouping is supported (e.g. `group_by=model,session_id`).
+- Grouping is over first-class columns (`provider`, `model`, `usage_type`, `session_id`) — no JSONB tag queries.
+- The `metric` parameter controls whether the API sums `quantity` (usage) or `total_cost` (cost).
+- Windows snap to clock boundaries (top of hour, midnight, first of month) rather than sliding, except for the 10m range.
+- Session names are displayed in the session filter and in group-by-session breakdowns for readability.
 
 ---
 
-## Milestone 3: Spending Limits (~90 min)
+## Milestone 3: Pricing Table + Idempotency + Polish (~30 min)
 
-**Objective**: Give admins the ability to enforce spending caps that block agent activity when exceeded.
+**Objective**: Harden the pipeline for correctness and make the pricing model extensible. This is a "nice-to-have" layer — the dashboard works without it, but these additions prevent duplicate billing and make pricing maintainable.
 
 ### Key Outcomes
 
-1. **Spending limits** — admins can create limits scoped to a session or globally, with a configurable max cost.
-2. **Limit enforcement in the pipeline** — after each cost record is written, the Cost Backend checks limits. If a limit is exceeded, it calls back to the control plane to block the session. The agent's LLM loop checks the blocked set before every call.
-3. **Browser notifications** — when a limit is hit, the browser receives a WebSocket alert and displays a block banner.
+1. **DB-backed pricing** — `list_prices` table seeded on startup with per-model rates. An in-memory cache avoids DB lookups on every event. A `pricing_updates` table tracks freshness; the cache auto-refreshes hourly.
+2. **Idempotent event processing** — `usage` table has a unique constraint on `(event_id, usage_type)`. Duplicate events are silently skipped via `ON CONFLICT DO NOTHING`.
+3. **Flat usage decomposition** — nested OpenAI usage dicts (e.g. `prompt_tokens_details.cached_tokens`) are flattened into individual metering rows, each costed independently.
+4. **Token fee surcharge** — a synthetic `token_fee` usage type is appended to each event, applying a per-token platform fee on top of LLM provider costs.
 
 ### Decisions for M3
 
-- Spending limits live in the Billing DB (`spending_limits` table with scope, max_cost).
-- Enforcement is eventual — the event that crosses a limit is the last one allowed; the block takes effect before the next LLM call.
-- The control plane exposes an internal-only `POST /internal/session/{id}/block` endpoint; the Cost Backend is the only caller.
+- Pricing is seeded from a Python constant (`SEED_PRICES`) — no admin UI for editing prices.
+- Wildcard pricing (`provider=*, model=*`) is used for the token fee, falling back when no exact match exists.
+- The `costs` table joins to `usage` via `usage_id`, keeping metering and costing cleanly separated.
 
 ---
 
 ## Future
 
+- **Spending limits** — admins can create limits scoped to a session or globally. The Cost Backend enforces caps and calls back to the control plane to block sessions that exceed their budget.
 - **Arbitrary tag-based grouping** — users can group usage and costs by any number of custom tags attached to usage events, enabling fully flexible multi-dimensional analysis.
