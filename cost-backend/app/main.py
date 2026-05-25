@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, select, text
 
 from app.database import async_session, init_db
@@ -248,6 +248,51 @@ async def ws_costs(websocket: WebSocket, session_id: str):
     finally:
         ws_subscribers.get(session_id, set()).discard(websocket)
         logger.info(f"Cost WS disconnected for session {session_id[:8]}")
+
+
+ALLOWED_GROUP_BY_COLUMNS = {"provider", "model", "usage_type", "session_id"}
+
+
+@app.get("/costs/breakdown")
+async def get_costs_breakdown(
+    group_by: str = Query(..., description="Comma-separated dimensions: provider, model, usage_type, session_id"),
+    metric: str = Query("cost", description="'cost' for dollar amounts, 'usage' for raw token quantities"),
+):
+    dimensions = [d.strip() for d in group_by.split(",") if d.strip()]
+    invalid = [d for d in dimensions if d not in ALLOWED_GROUP_BY_COLUMNS]
+    if invalid:
+        return {"error": f"Invalid group_by dimensions: {invalid}. Allowed: {sorted(ALLOWED_GROUP_BY_COLUMNS)}"}
+    if not dimensions:
+        return {"error": "At least one group_by dimension is required"}
+
+    group_cols = [getattr(Usage, d) for d in dimensions]
+
+    if metric == "usage":
+        value_col = func.sum(Usage.quantity).label("value")
+    else:
+        value_col = func.sum(Cost.total_cost).label("value")
+
+    async with async_session() as db:
+        query = (
+            select(*group_cols, value_col)
+            .join(Usage, Cost.usage_id == Usage.id)
+            .group_by(*group_cols)
+            .order_by(value_col.desc())
+        )
+        result = await db.execute(query)
+        rows = result.all()
+
+    return {
+        "group_by": dimensions,
+        "metric": metric,
+        "data": [
+            {
+                **{dim: row[i] for i, dim in enumerate(dimensions)},
+                "value": float(row[-1]) if row[-1] is not None else 0.0,
+            }
+            for row in rows
+        ],
+    }
 
 
 @app.get("/costs/{session_id}")

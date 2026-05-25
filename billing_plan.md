@@ -93,15 +93,15 @@ graph LR
 ### Key Outcomes
 
 1. **Usage / Cost toggle** — the "Usage & Cost" tab lets users switch between viewing raw usage quantities and computed dollar costs in the graph.
-2. **Group-by dimension selector** — users can group data by one of four fixed dimensions: `provider`, `model`, `usage_type`, or `session_id`.
-3. **Breakdown API** — a `GET /costs/breakdown?group_by=<dimension>&metric=usage|cost` endpoint returns aggregated data for the selected dimension and metric.
+2. **Group-by dimension selector** — users can group data by any combination of dimensions: `provider`, `model`, `usage_type`, `session_id`.
+3. **Breakdown API** — a `GET /costs/breakdown?group_by=<dim>[,<dim>...]&metric=usage|cost` endpoint returns aggregated data for the selected dimensions and metric.
 4. **Enriched UI** — the graph updates live as new events arrive, with the selected grouping and metric applied in real time.
 
 ### Decisions for M2
 
 - Grouping is over first-class columns (`provider`, `model`, `usage_type`, `session_id`) — no JSONB tag queries yet.
 - The `metric` toggle controls whether the API sums `quantity` (usage) or `total_cost` (cost).
-- Only single-dimension grouping is supported; multi-dimension is deferred.
+- Multi-dimension grouping is supported (e.g. `group_by=model,session_id`).
 
 ---
 
