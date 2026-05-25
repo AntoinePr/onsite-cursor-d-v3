@@ -41,7 +41,6 @@
       overflow: hidden;
     }
 
-    /* ── Chat area ── */
     .chat-area {
       flex: 1;
       display: flex;
@@ -435,32 +434,100 @@
       background: #0f0f0f;
     }
 
-    .cost-dashboard-header {
-      padding: 16px 24px;
+    .cost-toolbar {
+      padding: 12px 24px;
       border-bottom: 1px solid #2a2a3e;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
+      flex-shrink: 0;
     }
 
-    .cost-dashboard-header h2 {
-      font-size: 18px;
+    .toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-arrow {
+      background: #2a2a3e;
+      border: 1px solid #3b3b5c;
+      color: #888;
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .nav-arrow:hover { background: #333355; color: #a78bfa; }
+    .nav-arrow:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .window-label {
+      font-size: 13px;
       font-weight: 600;
-      color: #e0e0e0;
+      color: #ccc;
+      padding: 0 8px;
+      white-space: nowrap;
+      min-width: 100px;
+      text-align: center;
     }
 
+    .range-pills {
+      display: flex;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .range-pill {
+      padding: 5px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      text-transform: uppercase;
+    }
+    .range-pill:hover { color: #a78bfa; background: #222240; }
+    .range-pill.active { color: #fff; background: #6d28d9; }
+    .range-pill + .range-pill { border-left: 1px solid #2a2a3e; }
+
+    .toolbar-select {
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 6px;
+      color: #ccc;
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      outline: none;
+    }
+    .toolbar-select:hover { border-color: #a78bfa; }
 
     .cost-summary-row {
       display: flex;
       gap: 24px;
-      padding: 16px 24px;
+      padding: 12px 24px;
     }
 
     .cost-summary-card {
       background: #1a1a2e;
       border: 1px solid #2a2a3e;
       border-radius: 8px;
-      padding: 14px 20px;
+      padding: 12px 20px;
       min-width: 160px;
     }
 
@@ -476,26 +543,15 @@
       font-size: 22px;
       font-weight: 600;
       font-family: 'SF Mono', Menlo, monospace;
+      color: #a78bfa;
     }
-
-    .cost-summary-card .value.cost-color { color: #a78bfa; }
-    .cost-summary-card .value.token-color { color: #4ade80; }
 
     .chart-container {
       flex: 1;
-      padding: 16px 24px;
+      padding: 0 24px 16px;
       display: flex;
       flex-direction: column;
       min-height: 0;
-    }
-
-    .chart-container h3 {
-      font-size: 13px;
-      font-weight: 600;
-      color: #888;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      margin-bottom: 12px;
     }
 
     .chart-wrapper {
@@ -576,21 +632,38 @@
     </div>
 
     <div class="cost-dashboard" id="cost-dashboard" style="display: none;">
-      <div class="cost-dashboard-header">
-        <h2>Usage & Cost</h2>
+      <div class="cost-toolbar">
+        <div class="toolbar-left">
+          <button class="nav-arrow" id="nav-left" onclick="navPeriod(-1)">&lt;</button>
+          <span class="window-label" id="window-label"></span>
+          <button class="nav-arrow" id="nav-right" onclick="navPeriod(1)" disabled>&gt;</button>
+          <div class="range-pills" id="range-pills">
+            <button class="range-pill active" data-range="10m" onclick="setRange('10m')">10m</button>
+            <button class="range-pill" data-range="1h" onclick="setRange('1h')">1h</button>
+            <button class="range-pill" data-range="1d" onclick="setRange('1d')">1d</button>
+            <button class="range-pill" data-range="1m" onclick="setRange('1m')">1m</button>
+          </div>
+        </div>
+        <div class="toolbar-right">
+          <select class="toolbar-select" id="group-by-select" onchange="setGroupBy(this.value)">
+            <option value="">Group By: None</option>
+            <option value="model">Group By: Model</option>
+            <option value="usage_type">Group By: Usage Type</option>
+            <option value="provider">Group By: Provider</option>
+          </select>
+          <select class="toolbar-select" id="metric-select" onchange="setMetric(this.value)">
+            <option value="cost">Metric: Spend</option>
+            <option value="usage">Metric: Tokens</option>
+          </select>
+        </div>
       </div>
       <div class="cost-summary-row">
         <div class="cost-summary-card">
-          <div class="label">Total Cost</div>
-          <div class="value cost-color" id="dash-total-cost">$0.000000</div>
-        </div>
-        <div class="cost-summary-card">
-          <div class="label">Total Tokens</div>
-          <div class="value token-color" id="dash-total-tokens">0</div>
+          <div class="label" id="dash-label">Total Spend</div>
+          <div class="value" id="dash-total">$0.000000</div>
         </div>
       </div>
       <div class="chart-container">
-        <h3>Cost per minute (last 15 min)</h3>
         <div class="chart-wrapper" id="recharts-mount"></div>
       </div>
     </div>
@@ -606,8 +679,6 @@
     const sessionsList = document.getElementById('sessions-list');
     const pastSessionsList = document.getElementById('past-sessions-list');
 
-    const dashTotalCost = document.getElementById('dash-total-cost');
-    const dashTotalTokens = document.getElementById('dash-total-tokens');
     const costTokensEl = document.getElementById('cost-tokens');
     const costTotalEl = document.getElementById('cost-total');
     const costTab = document.getElementById('cost-tab');
@@ -616,20 +687,323 @@
     const costDashboard = document.getElementById('cost-dashboard');
     const chatArea = document.querySelector('.chat-area');
     const rechartsMount = document.getElementById('recharts-mount');
+    const dashTotal = document.getElementById('dash-total');
+    const dashLabel = document.getElementById('dash-label');
 
     let costHistory = [];
+    let costGroups = null;
+    let costNowIso = null;
     let costDashboardVisible = false;
+    let costPollTimer = null;
+    let tilePollTimer = null;
+
+    let currentRange = '10m';
+    let currentOffset = 0;
+    let currentMetric = 'cost';
+    let currentGroupBy = null;
 
     let workersAvailable = 0;
-
     let sessionId = localStorage.getItem('sessionId');
-
     let ws = null;
-    let costWs = null;
     let isProcessing = false;
     const renderedMessageIds = new Set();
 
-    // ── WebSocket ──
+    const GROUP_COLORS = ['#6d28d9', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#ec4899', '#14b8a6', '#f97316'];
+
+    // ── Cost Dashboard ──
+
+    function friendlyLabel(s) {
+      if (!s) return '';
+      return s
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function formatCost(v) {
+      if (v == null || v === 0) return '$0';
+      if (v < 0.001) return '$' + v.toFixed(6);
+      if (v < 1) return '$' + v.toFixed(4);
+      return '$' + v.toFixed(2);
+    }
+
+    function formatTokens(v) {
+      if (v == null || v === 0) return '0';
+      return Math.round(v).toLocaleString();
+    }
+
+    async function fetchHistory() {
+      const base = currentMetric === 'cost' ? '/cost/history' : '/usage/history';
+      let url = `http://${location.hostname}:8002${base}?range=${currentRange}&offset=${currentOffset}`;
+      if (currentGroupBy) url += `&group_by=${currentGroupBy}`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        costHistory = data.buckets || [];
+        costGroups = data.groups || null;
+        costNowIso = data.now || null;
+
+        if (currentMetric === 'cost') {
+          dashLabel.textContent = 'Total Spend';
+          dashTotal.textContent = formatCost(data.window_total);
+        } else {
+          dashLabel.textContent = 'Total Tokens';
+          dashTotal.textContent = formatTokens(data.window_total);
+        }
+
+        document.getElementById('nav-right').disabled = (currentOffset <= 0);
+        document.getElementById('window-label').textContent = _formatWindowLabel(data.window_start, data.window_end);
+        renderCostChart();
+      } catch (e) {
+        console.error('fetchHistory error:', e);
+      }
+    }
+
+    async function fetchSidebarTile() {
+      try {
+        const res = await fetch(`http://${location.hostname}:8002/cost`);
+        const data = await res.json();
+        costTokensEl.textContent = (data.total_tokens || 0).toLocaleString();
+        costTotalEl.textContent = '$' + (data.total_cost || 0).toFixed(6);
+      } catch {}
+    }
+
+    function startCostPolling() {
+      if (costPollTimer) return;
+      fetchHistory();
+      costPollTimer = setInterval(fetchHistory, 5000);
+    }
+
+    function stopCostPolling() {
+      if (costPollTimer) { clearInterval(costPollTimer); costPollTimer = null; }
+    }
+
+    function setRange(r) {
+      currentRange = r;
+      currentOffset = 0;
+      document.querySelectorAll('.range-pill').forEach(p => p.classList.toggle('active', p.dataset.range === r));
+      fetchHistory();
+    }
+
+    function setMetric(m) {
+      currentMetric = m;
+      fetchHistory();
+    }
+
+    function setGroupBy(g) {
+      currentGroupBy = g || null;
+      fetchHistory();
+    }
+
+    function navPeriod(dir) {
+      currentOffset = Math.max(0, currentOffset - dir);
+      fetchHistory();
+    }
+
+    function showCostDashboard(pushState = true) {
+      costDashboardVisible = true;
+      chatArea.style.display = 'none';
+      costDashboard.style.display = 'flex';
+      sessionsPanels.style.display = 'none';
+      costTab.classList.add('active');
+      sessionsTab.classList.remove('active');
+      if (pushState) history.pushState({ view: 'cost' }, '', '/usage-and-cost');
+      startCostPolling();
+    }
+
+    function showSessionsView(pushState = true) {
+      costDashboardVisible = false;
+      costDashboard.style.display = 'none';
+      chatArea.style.display = 'flex';
+      sessionsPanels.style.display = '';
+      costTab.classList.remove('active');
+      sessionsTab.classList.add('active');
+      if (pushState) history.pushState({ view: 'sessions' }, '', '/sessions');
+      stopCostPolling();
+    }
+
+    window.addEventListener('popstate', (e) => {
+      if (e.state && e.state.view === 'cost') {
+        showCostDashboard(false);
+      } else {
+        showSessionsView(false);
+      }
+    });
+
+    const rechartsRoot = ReactDOM.createRoot(rechartsMount);
+
+    function renderCostChart() {
+      const {
+        ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
+        CartesianGrid, Tooltip, Legend, Cell, ReferenceArea
+      } = Recharts;
+
+      const isCost = currentMetric === 'cost';
+      const fmt = isCost ? formatCost : formatTokens;
+
+      const nowMs = costNowIso ? new Date(costNowIso).getTime() : Date.now();
+
+      let data;
+      if (costGroups && costGroups.length > 0) {
+        data = costHistory.map(d => {
+          const bucketMs = new Date(d.bucket).getTime();
+          const row = { time: _formatBucketTime(d.bucket), cumulative: d.cumulative, future: bucketMs > nowMs };
+          if (d.breakdown) {
+            for (const g of costGroups) row[g] = d.breakdown[g] || 0;
+          }
+          return row;
+        });
+      } else {
+        data = costHistory.map(d => {
+          const bucketMs = new Date(d.bucket).getTime();
+          return {
+            time: _formatBucketTime(d.bucket),
+            value: d.value,
+            cumulative: d.cumulative,
+            future: bucketMs > nowMs,
+          };
+        });
+      }
+
+      const CustomTooltip = ({ active, payload, label }) => {
+        if (!active || !payload || !payload.length) return null;
+        const items = payload.filter(p => p.dataKey !== 'cumulative');
+        const cumVal = payload.find(p => p.dataKey === 'cumulative');
+        const isFuture = payload[0] && payload[0].payload && payload[0].payload.future;
+        return React.createElement('div', {
+          style: {
+            background: '#1a1a2e', border: '1px solid #2a2a3e',
+            borderRadius: '6px', padding: '10px 14px', fontSize: '12px',
+            fontFamily: "'SF Mono', Menlo, monospace",
+          }
+        },
+          React.createElement('div', { style: { color: '#888', marginBottom: '6px', fontWeight: 600 } },
+            label + (isFuture ? ' (future)' : '')),
+          ...items.map((it, i) =>
+            React.createElement('div', { key: i, style: { color: it.color || '#a78bfa', marginBottom: '2px' } },
+              friendlyLabel(it.name) + ': ' + fmt(it.value))
+          ),
+          cumVal && React.createElement('div', { style: { color: '#4ade80', marginTop: '4px', borderTop: '1px solid #2a2a3e', paddingTop: '4px' } },
+            'Cumulative: ' + fmt(cumVal.value))
+        );
+      };
+
+      const bars = [];
+      if (costGroups && costGroups.length > 0) {
+        costGroups.forEach((g, i) => {
+          const baseColor = GROUP_COLORS[i % GROUP_COLORS.length];
+          bars.push(React.createElement(Bar, {
+            key: g, yAxisId: 'val', dataKey: g, name: friendlyLabel(g), stackId: 'stack',
+            radius: i === costGroups.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0],
+            maxBarSize: 40,
+            fill: baseColor,
+          },
+            data.map((entry, idx) =>
+              React.createElement(Cell, { key: idx, fill: baseColor, fillOpacity: entry.future ? 0.2 : 1 })
+            )
+          ));
+        });
+      } else {
+        bars.push(React.createElement(Bar, {
+          key: 'value', yAxisId: 'val', dataKey: 'value',
+          name: currentMetric === 'cost' ? 'Spend' : 'Tokens',
+          radius: [3, 3, 0, 0], maxBarSize: 40,
+          fill: '#6d28d9',
+        },
+          data.map((entry, idx) =>
+            React.createElement(Cell, { key: idx, fill: '#6d28d9', fillOpacity: entry.future ? 0.2 : 1 })
+          )
+        ));
+      }
+
+      const futureStartIdx = data.findIndex(d => d.future);
+      let futureRefArea = null;
+      if (futureStartIdx > 0) {
+        futureRefArea = React.createElement(ReferenceArea, {
+          x1: data[futureStartIdx].time,
+          x2: data[data.length - 1].time,
+          yAxisId: 'val',
+          fill: '#ffffff',
+          fillOpacity: 0.03,
+          strokeOpacity: 0,
+        });
+      }
+
+      const xTickStyle = (value, index) => {
+        if (index < data.length && data[index] && data[index].future) {
+          return { fill: '#333', fontSize: 10 };
+        }
+        return { fill: '#555', fontSize: 10 };
+      };
+
+      const chart = React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+        React.createElement(ComposedChart, { data, margin: { top: 8, right: 12, left: 12, bottom: 4 } },
+          React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#2a2a3e', vertical: false }),
+          React.createElement(XAxis, {
+            dataKey: 'time', tick: { fill: '#555', fontSize: 10 },
+            axisLine: { stroke: '#2a2a3e' }, tickLine: false,
+          }),
+          React.createElement(YAxis, {
+            yAxisId: 'val', tick: { fill: '#555', fontSize: 10 },
+            axisLine: false, tickLine: false,
+            tickFormatter: fmt, width: 70,
+          }),
+          React.createElement(YAxis, {
+            yAxisId: 'cum', orientation: 'right',
+            tick: { fill: '#555', fontSize: 10 },
+            axisLine: false, tickLine: false,
+            tickFormatter: fmt, width: 70,
+          }),
+          React.createElement(Tooltip, { content: React.createElement(CustomTooltip), cursor: { fill: 'rgba(167,139,250,0.08)' } }),
+          React.createElement(Legend, {
+            wrapperStyle: { fontSize: '11px', color: '#888', paddingTop: '4px' },
+            formatter: (value) => friendlyLabel(value),
+          }),
+          futureRefArea,
+          ...bars,
+          React.createElement(Line, {
+            yAxisId: 'cum', dataKey: 'cumulative', name: 'Cumulative', type: 'monotone',
+            stroke: '#4ade80', strokeWidth: 2, dot: false,
+            activeDot: { r: 4, fill: '#4ade80', stroke: '#0f0f0f', strokeWidth: 2 },
+          }),
+        )
+      );
+
+      rechartsRoot.render(chart);
+    }
+
+    function _formatBucketTime(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (currentRange === '1m') {
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      } else if (currentRange === '1d') {
+        return d.getHours().toString().padStart(2, '0') + ':00';
+      } else {
+        return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+      }
+    }
+
+    function _formatWindowLabel(startIso, endIso) {
+      if (!startIso || !endIso) return '';
+      const s = new Date(startIso);
+      const e = new Date(endIso);
+      const utcTime = (d) => d.getUTCHours().toString().padStart(2, '0') + ':' + d.getUTCMinutes().toString().padStart(2, '0');
+      const utcMonthDay = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+      const utcMonthYear = (d) => d.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+      if (currentRange === '10m') {
+        return utcTime(s) + ' – ' + utcTime(e);
+      } else if (currentRange === '1h') {
+        return utcMonthDay(s) + ', ' + utcTime(s) + ' – ' + utcTime(e);
+      } else if (currentRange === '1d') {
+        return utcMonthDay(s);
+      } else if (currentRange === '1m') {
+        return utcMonthYear(s);
+      }
+      return '';
+    }
+
+    // ── Chat WebSocket ──
 
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -639,7 +1013,6 @@
         connectionDot.className = 'connected';
         refreshWorkers();
         refreshSessions();
-        connectCostWs();
       };
 
       ws.onmessage = (event) => {
@@ -655,145 +1028,13 @@
       ws.onerror = () => {};
     }
 
-    function connectCostWs() {
-      if (costWs) { costWs.onclose = null; costWs.close(); costWs = null; }
-      const wsSessionId = sessionId || '_all';
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      costWs = new WebSocket(`${protocol}//${location.hostname}:8002/ws/costs/${wsSessionId}`);
-      costWs.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'cost_update') {
-          if (data.cumulative) {
-            dashTotalCost.textContent = '$' + data.cumulative.total_cost.toFixed(6);
-            dashTotalTokens.textContent = data.cumulative.total_tokens.toLocaleString();
-            costTokensEl.textContent = data.cumulative.total_tokens.toLocaleString();
-            costTotalEl.textContent = '$' + data.cumulative.total_cost.toFixed(6);
-          }
-          if (data.history) {
-            costHistory = data.history;
-            if (costDashboardVisible) renderCostChart();
-          }
-        }
-      };
-      costWs.onclose = () => { costWs = null; };
-      costWs.onerror = () => {};
-    }
-
     function resetCostPanel() {
-      dashTotalCost.textContent = '$0.000000';
-      dashTotalTokens.textContent = '0';
       costTokensEl.textContent = '0';
       costTotalEl.textContent = '$0.000000';
+      dashTotal.textContent = '$0.000000';
       costHistory = [];
+      costGroups = null;
       if (costDashboardVisible) renderCostChart();
-    }
-
-    function showCostDashboard(pushState = true) {
-      costDashboardVisible = true;
-      chatArea.style.display = 'none';
-      costDashboard.style.display = 'flex';
-      sessionsPanels.style.display = 'none';
-      costTab.classList.add('active');
-      sessionsTab.classList.remove('active');
-      if (pushState) history.pushState({ view: 'cost' }, '', '/usage-and-cost');
-      renderCostChart();
-      if (!costWs) connectCostWs();
-    }
-
-    function showSessionsView(pushState = true) {
-      costDashboardVisible = false;
-      costDashboard.style.display = 'none';
-      chatArea.style.display = 'flex';
-      sessionsPanels.style.display = '';
-      costTab.classList.remove('active');
-      sessionsTab.classList.add('active');
-      if (pushState) history.pushState({ view: 'sessions' }, '', '/sessions');
-    }
-
-    window.addEventListener('popstate', (e) => {
-      if (e.state && e.state.view === 'cost') {
-        showCostDashboard(false);
-      } else {
-        showSessionsView(false);
-      }
-    });
-
-    const rechartsRoot = ReactDOM.createRoot(rechartsMount);
-
-    function formatCost(v) {
-      if (v == null || v === 0) return '$0';
-      if (v < 0.001) return '$' + v.toFixed(6);
-      if (v < 1) return '$' + v.toFixed(4);
-      return '$' + v.toFixed(2);
-    }
-
-    function renderCostChart() {
-      const {
-        ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
-        CartesianGrid, Tooltip, Legend
-      } = Recharts;
-
-      const data = (costHistory.length ? costHistory : []).map(d => ({
-        time: d.minute ? d.minute.slice(11, 16) : '',
-        cost: d.cost,
-        cumulative: d.cumulative,
-      }));
-
-      const CustomTooltip = ({ active, payload, label }) => {
-        if (!active || !payload || !payload.length) return null;
-        const costVal = payload.find(p => p.dataKey === 'cost');
-        const cumVal = payload.find(p => p.dataKey === 'cumulative');
-        return React.createElement('div', {
-          style: {
-            background: '#1a1a2e', border: '1px solid #2a2a3e',
-            borderRadius: '6px', padding: '10px 14px', fontSize: '12px',
-            fontFamily: "'SF Mono', Menlo, monospace",
-          }
-        },
-          React.createElement('div', { style: { color: '#888', marginBottom: '6px', fontWeight: 600 } }, label),
-          costVal && React.createElement('div', { style: { color: '#a78bfa', marginBottom: '3px' } },
-            'Cost/min: ', formatCost(costVal.value)),
-          cumVal && React.createElement('div', { style: { color: '#4ade80' } },
-            'Cumulative: ', formatCost(cumVal.value))
-        );
-      };
-
-      const chart = React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
-        React.createElement(ComposedChart, { data, margin: { top: 8, right: 12, left: 12, bottom: 4 } },
-          React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#2a2a3e', vertical: false }),
-          React.createElement(XAxis, {
-            dataKey: 'time', tick: { fill: '#555', fontSize: 10 },
-            axisLine: { stroke: '#2a2a3e' }, tickLine: false,
-          }),
-          React.createElement(YAxis, {
-            yAxisId: 'cost', tick: { fill: '#555', fontSize: 10 },
-            axisLine: false, tickLine: false,
-            tickFormatter: formatCost, width: 70,
-          }),
-          React.createElement(YAxis, {
-            yAxisId: 'cum', orientation: 'right',
-            tick: { fill: '#555', fontSize: 10 },
-            axisLine: false, tickLine: false,
-            tickFormatter: formatCost, width: 70,
-          }),
-          React.createElement(Tooltip, { content: React.createElement(CustomTooltip), cursor: { fill: 'rgba(167,139,250,0.08)' } }),
-          React.createElement(Legend, {
-            wrapperStyle: { fontSize: '11px', color: '#888', paddingTop: '4px' },
-            formatter: (value) => value === 'cost' ? 'Cost / min' : 'Cumulative',
-          }),
-          React.createElement(Bar, {
-            yAxisId: 'cost', dataKey: 'cost', fill: '#6d28d9',
-            radius: [3, 3, 0, 0], maxBarSize: 40,
-          }),
-          React.createElement(Line, {
-            yAxisId: 'cum', dataKey: 'cumulative', type: 'monotone',
-            stroke: '#4ade80', strokeWidth: 2, dot: { r: 3, fill: '#4ade80' },
-            activeDot: { r: 5, fill: '#4ade80', stroke: '#0f0f0f', strokeWidth: 2 },
-          }),
-        )
-      );
-
-      rechartsRoot.render(chart);
     }
 
     function handleMessage(data) {
@@ -945,12 +1186,12 @@
       div.className = 'message tool-call';
       div.id = `tc-${toolCallId}`;
 
-      const header = document.createElement('div');
-      header.className = 'tool-call-header';
-      header.innerHTML = `<span class="status-indicator ${status}" id="tc-status-${toolCallId}"></span>` +
+      const hdr = document.createElement('div');
+      hdr.className = 'tool-call-header';
+      hdr.innerHTML = `<span class="status-indicator ${status}" id="tc-status-${toolCallId}"></span>` +
         `<span class="fn-name">${functionName}</span>` +
         `<span class="worker-tag" id="tc-worker-${toolCallId}"></span>`;
-      div.appendChild(header);
+      div.appendChild(hdr);
 
       const argsDiv = document.createElement('div');
       argsDiv.textContent = JSON.stringify(args, null, 2);
@@ -1165,7 +1406,6 @@
         viewingPastSession = true;
         if (ws) { ws.onclose = null; ws.close(); ws = null; }
         viewPastSession(id);
-        connectCostWs();
       } else {
         viewingPastSession = false;
         if (ws) ws.close();
@@ -1214,6 +1454,8 @@
 
     setInterval(refreshWorkers, 5000);
     setInterval(refreshSessions, 5000);
+    tilePollTimer = setInterval(fetchSidebarTile, 5000);
+    fetchSidebarTile();
 
     function showEmptyState() {
       const el = document.getElementById('empty-state');
