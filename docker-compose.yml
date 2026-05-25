@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: toolexec
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  control-plane:
+    build:
+      context: ./control-plane
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/toolexec
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./control-plane/app:/app/app
+
+  worker-1:
+    build:
+      context: ./worker
+    environment:
+      CONTROL_PLANE_URL: ws://control-plane:8000/ws/worker
+      WORKER_NAME: worker-1
+    depends_on:
+      - control-plane
+    volumes:
+      - ./worker/main.py:/app/main.py
+
+  worker-2:
+    build:
+      context: ./worker
+    environment:
+      CONTROL_PLANE_URL: ws://control-plane:8000/ws/worker
+      WORKER_NAME: worker-2
+    depends_on:
+      - control-plane
+    volumes:
+      - ./worker/main.py:/app/main.py
+
+  worker-3:
+    build:
+      context: ./worker
+    environment:
+      CONTROL_PLANE_URL: ws://control-plane:8000/ws/worker
+      WORKER_NAME: worker-3
+    depends_on:
+      - control-plane
+    volumes:
+      - ./worker/main.py:/app/main.py
+
+volumes:
+  pgdata:

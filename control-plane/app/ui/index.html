@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remote Tool Execution</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #1a1a2e;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #2a2a3e;
+    }
+
+    header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #a78bfa;
+    }
+
+    #worker-status {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .worker-badge {
+      display: inline-block;
+      background: #1e3a2f;
+      color: #4ade80;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      margin-left: 4px;
+    }
+
+    #chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .message {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .message.user {
+      align-self: flex-end;
+      background: #3b3b8f;
+      color: #e0e0ff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .message.assistant {
+      align-self: flex-start;
+      background: #1e1e2e;
+      border: 1px solid #2a2a3e;
+      border-bottom-left-radius: 4px;
+    }
+
+    .message.status {
+      align-self: center;
+      background: transparent;
+      color: #666;
+      font-size: 12px;
+      font-style: italic;
+      padding: 4px;
+    }
+
+    .message.tool-call {
+      align-self: flex-start;
+      background: #1a1a2e;
+      border: 1px solid #3b3b5c;
+      border-left: 3px solid #a78bfa;
+      font-family: 'SF Mono', Menlo, monospace;
+      font-size: 12px;
+      max-width: 90%;
+    }
+
+    .tool-call-header {
+      color: #a78bfa;
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .tool-call-result {
+      color: #4ade80;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #2a2a3e;
+    }
+
+    .tool-call-error {
+      color: #f87171;
+    }
+
+    #input-area {
+      padding: 16px 24px;
+      background: #1a1a2e;
+      border-top: 1px solid #2a2a3e;
+      display: flex;
+      gap: 10px;
+    }
+
+    #message-input {
+      flex: 1;
+      padding: 10px 14px;
+      background: #0f0f0f;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 14px;
+      outline: none;
+      font-family: inherit;
+    }
+
+    #message-input:focus { border-color: #a78bfa; }
+
+    #send-btn {
+      padding: 10px 20px;
+      background: #6d28d9;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    #send-btn:hover { background: #7c3aed; }
+    #send-btn:disabled { background: #333; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Remote Tool Execution</h1>
+    <div id="worker-status">Workers: loading...</div>
+  </header>
+
+  <div id="chat-container"></div>
+
+  <div id="input-area">
+    <input type="text" id="message-input" placeholder="Ask something... (e.g. 'run uname -a on worker-1')" autocomplete="off" />
+    <button id="send-btn">Send</button>
+  </div>
+
+  <script>
+    const sessionId = crypto.randomUUID();
+    const chatContainer = document.getElementById('chat-container');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const workerStatus = document.getElementById('worker-status');
+
+    let ws = null;
+    let isProcessing = false;
+
+    function connect() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}/ws/chat/${sessionId}`);
+
+      ws.onopen = () => {
+        addMessage('Connected to control plane', 'status');
+        refreshWorkers();
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleMessage(data);
+      };
+
+      ws.onclose = () => {
+        addMessage('Disconnected. Reconnecting...', 'status');
+        setTimeout(connect, 2000);
+      };
+
+      ws.onerror = () => {};
+    }
+
+    function handleMessage(data) {
+      switch (data.type) {
+        case 'status':
+          addMessage(data.content, 'status');
+          break;
+
+        case 'assistant_message':
+          addMessage(data.content, 'assistant');
+          setProcessing(false);
+          break;
+
+        case 'tool_call_start':
+          addToolCall(data.tool_call_id, data.function_name, data.arguments);
+          break;
+
+        case 'tool_call_result':
+          updateToolCallResult(data.tool_call_id, data.result);
+          break;
+
+        case 'error':
+          addMessage(`Error: ${data.content}`, 'status');
+          setProcessing(false);
+          break;
+      }
+    }
+
+    function addMessage(content, type) {
+      const div = document.createElement('div');
+      div.className = `message ${type}`;
+      div.textContent = content;
+      chatContainer.appendChild(div);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function addToolCall(toolCallId, functionName, args) {
+      const div = document.createElement('div');
+      div.className = 'message tool-call';
+      div.id = `tc-${toolCallId}`;
+
+      const header = document.createElement('div');
+      header.className = 'tool-call-header';
+      header.textContent = `Tool: ${functionName}`;
+      div.appendChild(header);
+
+      const argsDiv = document.createElement('div');
+      argsDiv.textContent = JSON.stringify(args, null, 2);
+      div.appendChild(argsDiv);
+
+      const resultDiv = document.createElement('div');
+      resultDiv.className = 'tool-call-result';
+      resultDiv.textContent = 'Executing...';
+      resultDiv.id = `tc-result-${toolCallId}`;
+      div.appendChild(resultDiv);
+
+      chatContainer.appendChild(div);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function updateToolCallResult(toolCallId, result) {
+      const resultDiv = document.getElementById(`tc-result-${toolCallId}`);
+      if (resultDiv) {
+        try {
+          const parsed = JSON.parse(result);
+          if (parsed.error) {
+            resultDiv.className = 'tool-call-result tool-call-error';
+            resultDiv.textContent = `Error: ${parsed.error}`;
+          } else {
+            resultDiv.textContent = JSON.stringify(parsed, null, 2);
+          }
+        } catch {
+          resultDiv.textContent = result;
+        }
+      }
+    }
+
+    function setProcessing(value) {
+      isProcessing = value;
+      sendBtn.disabled = value;
+      messageInput.disabled = value;
+      if (!value) messageInput.focus();
+    }
+
+    function sendMessage() {
+      const content = messageInput.value.trim();
+      if (!content || isProcessing || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      addMessage(content, 'user');
+      ws.send(JSON.stringify({ type: 'user_message', content }));
+      messageInput.value = '';
+      setProcessing(true);
+    }
+
+    async function refreshWorkers() {
+      try {
+        const res = await fetch('/api/workers');
+        const data = await res.json();
+        if (data.workers.length === 0) {
+          workerStatus.innerHTML = 'Workers: <span style="color:#f87171">none connected</span>';
+        } else {
+          workerStatus.innerHTML = 'Workers: ' +
+            data.workers.map(w => `<span class="worker-badge">${w}</span>`).join('');
+        }
+      } catch {
+        workerStatus.textContent = 'Workers: unknown';
+      }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    setInterval(refreshWorkers, 5000);
+
+    connect();
+  </script>
+</body>
+</html>
