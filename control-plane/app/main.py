@@ -159,6 +159,19 @@ class WorkerPool:
     def get_worker_for_session(self, session_id: str) -> str | None:
         return self._session_worker.get(session_id)
 
+    def bind_available_worker(self, session_id: str) -> str | None:
+        """Eagerly bind an unbound worker to a session. Returns worker name or None."""
+        already = self._session_worker.get(session_id)
+        if already and already in self.workers:
+            return already
+        bound_names = set(self._worker_session.keys())
+        eligible = [n for n in self.workers if n not in bound_names]
+        if not eligible:
+            return None
+        name = eligible[0]
+        self.bind_worker(name, session_id)
+        return name
+
     def pick_worker(
         self, function_name: str, session_id: str, preferred: str | None = None
     ) -> tuple[str, WebSocket] | None:
@@ -475,6 +488,7 @@ async def ws_chat(websocket: WebSocket, session_id: str):
                 return
             db.add(Session(id=sid, status="active", last_active_at=now))
             await db.commit()
+            worker_pool.bind_available_worker(session_id)
         else:
             existing.status = "active"
             existing.last_active_at = now
