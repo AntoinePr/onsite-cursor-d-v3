@@ -64,11 +64,12 @@ sequenceDiagram
   CP->>W: ACK registration
 
   Note over B,CP: Browser startup
+  B->>CP: GET /api/workers, /api/sessions
+  CP->>B: Worker list + session list
+  Note over B: User clicks "+ New Session"
   B->>CP: Connect WebSocket /ws/chat/{session_id}
-  CP->>DB: Get or create session
-  CP->>DB: Load conversation history
-  CP->>B: Send existing messages (if any)
-  CP->>B: Send connected workers list
+  CP->>DB: Create session, bind worker
+  CP->>B: Session status
 ```
 
 ---
@@ -111,7 +112,10 @@ sequenceDiagram
 erDiagram
   sessions {
     uuid id PK
+    text status "active / expired"
     timestamp created_at
+    timestamp last_active_at
+    timestamp expires_at
   }
 
   messages {
@@ -132,19 +136,7 @@ erDiagram
     timestamp last_seen
   }
 
-  tool_call_dispatch {
-    uuid dispatch_id PK
-    text tool_call_id
-    uuid worker_id FK
-    text status "dispatched / acked / completed / timeout / failed"
-    timestamp dispatched_at
-    timestamp acked_at
-    timestamp completed_at
-    int retry_count
-  }
-
   sessions ||--o{ messages : "has"
-  workers ||--o{ tool_call_dispatch : "executes"
 ```
 
 ---
@@ -153,8 +145,8 @@ erDiagram
 
 | Name | Description | Behavior |
 |------|-------------|----------|
-| Worker failure | A worker crashes or disconnects mid-execution of a tool call | |
-| Control plane failure | The control plane process crashes or restarts | |
-| Tool call loss | A tool call request is sent but never reaches the worker (network drop, WS disconnect before delivery) | |
-| Duplicate tool call | The same tool call is dispatched more than once (e.g. retry fires before late ACK arrives) | |
-| User disconnects | The user closes the browser or loses connectivity | Keep sandboxes active for 1 hour before tearing them down |
+| Worker failure | Worker crashes or disconnects mid-tool-call | Tool call is retried on another available worker (up to 2 retries) |
+| Control plane failure | Control plane process crashes or restarts | Workers auto-reconnect; sessions persist in DB and replay on reconnect |
+| Tool call loss | Tool call request never reaches worker | Detected as worker disconnect; retried on another worker |
+| Duplicate tool call | Same tool call dispatched more than once | Workers cache completed tool_call_ids and return cached results |
+| User disconnects | Browser closes or loses connectivity | Session stays active for 1 hour (TTL); auto-expired by reaper task |

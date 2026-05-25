@@ -72,9 +72,6 @@ For M1, workers support 2 simple tools:
 
 - LLM streaming responses (token-by-token to browser via WebSocket)
 - Worker dashboard panel in UI: show connected workers, their status, capabilities
-- Conversation history panel with tool call details expandable
-- Add 1-2 more interesting tools: `read_file`, `http_request`
-- Rate limiting and basic auth token for worker connections
 - Graceful shutdown handling
 - README.md with architecture diagram and setup instructions
 

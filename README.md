@@ -42,13 +42,13 @@ open http://localhost:8000
 
 ## Usage
 
-Open **http://localhost:8000** and try:
+Open **http://localhost:8000**, click **+ New Session**, then try:
 
-- "Get system info on worker-1"
-- "Run `ls /tmp` on worker-2"
-- "Run `uname -a` on all workers"
+- "Get system info"
+- "Run `ls /tmp`"
+- "Run `uname -a`"
 
-The LLM will call the appropriate tool, the control plane dispatches it to a worker, and the result is streamed back.
+The LLM will call the appropriate tool, the control plane dispatches it to a bound worker, and the result is streamed back.
 
 ## Makefile Targets
 

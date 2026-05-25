@@ -298,11 +298,12 @@ class SessionState:
     async def _delivery_loop(self):
         while True:
             msg = await self.outbound_queue.get()
-            if self.browser_ws is not None:
-                try:
-                    await self.browser_ws.send_json(msg)
-                except Exception:
-                    self.browser_ws = None
+            while self.browser_ws is None:
+                await asyncio.sleep(0.1)
+            try:
+                await self.browser_ws.send_json(msg)
+            except Exception:
+                self.browser_ws = None
 
     def start_delivery(self):
         if self.delivery_task is None or self.delivery_task.done():
@@ -357,7 +358,23 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized")
     reaper = asyncio.create_task(_session_reaper())
     yield
+    logger.info("Shutting down gracefully...")
     reaper.cancel()
+    for state in session_manager.all_sessions():
+        if state.active_llm_task and not state.active_llm_task.done():
+            state.active_llm_task.cancel()
+        if state.browser_ws:
+            try:
+                await state.browser_ws.close(code=1001, reason="Server shutting down")
+            except Exception:
+                pass
+        state.cleanup()
+    for name in list(worker_pool.workers.keys()):
+        try:
+            await worker_pool.terminate_worker(name, "control plane shutting down")
+        except Exception:
+            pass
+    logger.info("Shutdown complete")
 
 
 async def _session_reaper():
@@ -618,67 +635,94 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
 
     for _ in range(10):
         try:
-            response = await openai_client.chat.completions.create(
+            stream = await openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
                 tools=TOOLS_SCHEMA,
                 tool_choice="auto",
+                stream=True,
             )
         except Exception as e:
             logger.error(f"LLM error: {e}")
             await state.send_to_browser({"type": "error", "content": f"LLM error: {e}"})
             return
 
-        choice = response.choices[0]
-        assistant_msg = choice.message
+        content_parts: list[str] = []
+        tool_call_chunks: dict[int, dict] = {}
+        finish_reason = None
 
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if not delta:
+                continue
+
+            if chunk.choices[0].finish_reason:
+                finish_reason = chunk.choices[0].finish_reason
+
+            if delta.content:
+                content_parts.append(delta.content)
+                await state.send_to_browser({
+                    "type": "assistant_token",
+                    "content": delta.content,
+                })
+
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tool_call_chunks:
+                        tool_call_chunks[idx] = {
+                            "id": tc_delta.id or "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    entry = tool_call_chunks[idx]
+                    if tc_delta.id:
+                        entry["id"] = tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            entry["function"]["name"] += tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            entry["function"]["arguments"] += tc_delta.function.arguments
+
+        full_content = "".join(content_parts) or None
         tool_calls_data = None
-        if assistant_msg.tool_calls:
-            tool_calls_data = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in assistant_msg.tool_calls
-            ]
+        if tool_call_chunks:
+            tool_calls_data = [tool_call_chunks[i] for i in sorted(tool_call_chunks)]
+
+        await state.send_to_browser({"type": "assistant_message_done"})
 
         async with async_session() as db:
             db.add(Message(
                 session_id=sid,
                 role="assistant",
-                content=assistant_msg.content,
+                content=full_content,
                 tool_calls=tool_calls_data,
             ))
             await db.commit()
 
-        if assistant_msg.content:
-            await state.send_to_browser(
-                {"type": "assistant_message", "content": assistant_msg.content}
-            )
+        if full_content and not tool_calls_data:
+            pass
 
-        if choice.finish_reason == "stop" or not assistant_msg.tool_calls:
+        if finish_reason == "stop" or not tool_calls_data:
             return
 
         messages.append({
             "role": "assistant",
-            "content": assistant_msg.content or "",
+            "content": full_content or "",
             "tool_calls": tool_calls_data,
         })
 
-        for tc in assistant_msg.tool_calls:
-            fn_name = tc.function.name
+        for tc in tool_calls_data:
+            tc_id = tc["id"]
+            fn_name = tc["function"]["name"]
             try:
-                fn_args = json.loads(tc.function.arguments)
+                fn_args = json.loads(tc["function"]["arguments"])
             except json.JSONDecodeError:
                 fn_args = {}
 
             await state.send_to_browser({
                 "type": "tool_call_start",
-                "tool_call_id": tc.id,
+                "tool_call_id": tc_id,
                 "function_name": fn_name,
                 "arguments": fn_args,
                 "status": "pending",
@@ -688,12 +732,12 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
             dispatched_worker = ""
             for attempt in range(max_retries + 1):
                 dispatched_worker, result = await worker_pool.dispatch_tool_call(
-                    tc.id, fn_name, fn_args.copy(), session_id=state.session_id,
+                    tc_id, fn_name, fn_args.copy(), session_id=state.session_id,
                 )
                 if dispatched_worker:
                     await state.send_to_browser({
                         "type": "tool_call_update",
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc_id,
                         "status": "running",
                         "worker_name": dispatched_worker,
                     })
@@ -703,7 +747,7 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
                     if parsed.get("_retry") and attempt < max_retries:
                         await state.send_to_browser({
                             "type": "tool_call_update",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc_id,
                             "status": "retrying",
                             "worker_name": dispatched_worker,
                             "error": parsed.get("error", "Worker disconnected"),
@@ -718,7 +762,7 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
 
             async with async_session() as db:
                 db.add(Message(
-                    session_id=sid, role="tool", content=result, tool_call_id=tc.id
+                    session_id=sid, role="tool", content=result, tool_call_id=tc_id
                 ))
                 await db.commit()
 
@@ -731,14 +775,14 @@ async def run_llm_loop(state: SessionState, messages: list[dict]):
 
             await state.send_to_browser({
                 "type": "tool_call_result",
-                "tool_call_id": tc.id,
+                "tool_call_id": tc_id,
                 "function_name": fn_name,
                 "result": result,
                 "worker_name": dispatched_worker,
                 "status": "failed" if is_error else "complete",
             })
 
-            messages.append({"role": "tool", "content": result, "tool_call_id": tc.id})
+            messages.append({"role": "tool", "content": result, "tool_call_id": tc_id})
 
 
 # ── WebSocket: Worker ────────────────────────────────────────────────────────

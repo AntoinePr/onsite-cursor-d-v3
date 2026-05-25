@@ -83,6 +83,16 @@
       border-bottom-left-radius: 4px;
     }
 
+    .message.assistant.streaming::after {
+      content: '\u258C';
+      animation: blink 0.8s step-end infinite;
+      color: #a78bfa;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
     .message.status {
       align-self: center;
       background: transparent;
@@ -456,6 +466,14 @@
           setProcessing(false);
           break;
 
+        case 'assistant_token':
+          appendToken(data.content);
+          break;
+
+        case 'assistant_message_done':
+          finalizeStreamingMessage();
+          break;
+
         case 'tool_call_start':
           addToolCall(data.tool_call_id, data.function_name, data.arguments, data.status || 'pending');
           break;
@@ -570,6 +588,26 @@
           resultDiv.textContent = result;
         }
       }
+    }
+
+    let streamingBubble = null;
+
+    function appendToken(token) {
+      if (!streamingBubble) {
+        streamingBubble = document.createElement('div');
+        streamingBubble.className = 'message assistant streaming';
+        chatContainer.appendChild(streamingBubble);
+      }
+      streamingBubble.textContent += token;
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function finalizeStreamingMessage() {
+      if (streamingBubble) {
+        streamingBubble.classList.remove('streaming');
+        streamingBubble = null;
+      }
+      setProcessing(false);
     }
 
     function setProcessing(value) {

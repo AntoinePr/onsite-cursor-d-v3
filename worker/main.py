@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import platform
+import signal
 import subprocess
 import sys
 
@@ -182,4 +183,19 @@ async def heartbeat_loop(ws):
 
 
 if __name__ == "__main__":
-    asyncio.run(connect())
+    loop = asyncio.new_event_loop()
+    main_task = loop.create_task(connect())
+
+    def _shutdown(sig, _frame):
+        logger.info(f"[{WORKER_NAME}] Received {signal.Signals(sig).name}, shutting down...")
+        main_task.cancel()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    try:
+        loop.run_until_complete(main_task)
+    except asyncio.CancelledError:
+        logger.info(f"[{WORKER_NAME}] Clean shutdown complete")
+    finally:
+        loop.close()
